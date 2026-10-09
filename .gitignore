@@ -34,6 +34,8 @@ __pycache__/
 .ui-checks-*/
 .backend-checks-*/
 .installer-checks-*/
+.provider-checks-*/
+.venv/
 .DS_Store
 coverage/
 dist/

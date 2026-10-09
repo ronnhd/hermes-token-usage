@@ -2,7 +2,7 @@
 
 Experimental **v0.1** local token ledger for the native [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk). Free to use, modify and share under MIT. Not an official Nous Research plugin.
 
-A status-bar chip and detail page show observed day / Monday week / calendar month increments, grouped by original profile name and exact stored billing-provider ID. Cache buckets and reasoning are shown separately. This reads **this Mac**, not the currently selected remote gateway.
+A status-bar chip and detail page show observed day / Monday week / calendar month increments, grouped by original profile and stored provider/endpoint route identity. Trustworthy profile-config names are displayed locally alongside raw provider IDs and sanitized route details. Cache buckets and reasoning are shown separately. This reads **this Mac**, not the currently selected remote gateway.
 
 ## Requirements and scope
 
@@ -71,16 +71,34 @@ The ledger, snapshot and logs are **preserved by default**, including on install
 ## What the numbers mean
 
 - These are **observed positive deltas since the first successful baseline**, not complete day/week/month totals or per-call historical reports. No historical totals are inferred from cumulative rows or `last_seen`.
-- Full compound keys include session, model, provider, base URL, billing mode and task. Raw provider IDs are displayed unchanged; missing IDs become `Unknown`. No model-to-provider guessing.
+- Full compound keys include session, model, provider, base URL, billing mode and task. New deltas retain model, provider, endpoint, billing mode and task; display labels never change snapshot keys or add usage. Missing IDs without endpoint evidence remain `Unknown`. No model-to-provider guessing.
 - Total = canonical uncached input + output + cache read + cache write. Reasoning is an **output subset**, never added twice. This assumes Hermes stores normalized canonical counters; older/different accounting schemas may not be compatible. Counts are not invoices, API cost estimates or subscription charges.
 - New historical/imported rows are baselined; rows with `first_seen` after the prior successful profile observation contribute their initial counters. Any counter decrease rebaselines the entire row and increments an anomaly count. Rows deleted between polls cannot be recovered.
 - Interval bounds span prior pre-read to current post-read observation. Intervals crossing the timezone's calendar boundary are reported separately as **boundary-ambiguous**, excluded from confirmed totals. Calendar boundaries use Python `ZoneInfo`, including DST offset changes; week starts Monday, month starts on day 1.
 - Sleep, outages and delayed database persistence widen intervals. Observation times are not exact API execution times. System clock changes can affect attribution. Changing timezone recomputes calendar attribution from the same ledger, not new history.
 - Source read failures preserve prior ledger counts. UI reports partial/error and stale snapshots (older than 95 seconds), with no remote fallback. Rotated logs, session-only legacy usage and unpersisted calls are not read.
 
+## Provider labels and older ledgers
+
+Labels are **local-only**, derived separately for each source profile from its sibling `config.yaml`. Modern `providers` dictionaries and legacy `custom_providers` lists/dictionaries are supported. An explicitly named stored provider ID wins and survives config removal. Generic `custom`/missing IDs match only a unique exact normalized full endpoint (scheme/host case, default port and trailing slash normalized). Shared endpoint aliases are listed as candidates, never assigned by model family. Unmatched/ambiguous endpoints display origin plus an opaque route fingerprint; URLs containing userinfo, path, query or fragment secrets are never rendered in full. Model, mode and task remain distinct route dimensions.
+
+PyYAML is optional: without it, collection and history still work with raw IDs/sanitized endpoints and a config-label warning. To enable labels, run the installer with a trusted Python that already has PyYAML (the scheduled collector uses that same interpreter), or create a dedicated environment:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install PyYAML
+.venv/bin/python install.py --timezone UTC
+# Full optional-label regressions:
+.venv/bin/python checks/provider_checks.py
+```
+
+For manual collection with a standard-library-only Python, `backend.py --config-python /absolute/path/to/trusted/python` uses that interpreter solely for safe YAML parsing. Config parse/helper failures do not discard counts or replace snapshots with zero. No heuristic YAML parser is used. Invalid config falls back to raw route identity rather than retaining potentially stale alias assignments.
+
+Existing plugin-ledger `deltas` are upgraded transactionally by adding a nullable `route` column. Existing rows/counts are untouched and displayed as **legacy route unidentified**; their endpoint/model/mode/task attribution was never retained and cannot be recovered from current snapshots. Legacy aggregates and newly observed route-specific deltas remain separate. Label changes recompute presentation without generating cumulative usage. Back up a running ledger using SQLite's backup API while holding its `collector.lock`; never copy a live DB without accounting for WAL or infer a historical endpoint from today's config. Source Hermes databases are not migrated.
+
 ## Privacy and permissions
 
-No telemetry, external API requests, remote collection or cost lookup. The collector opens source SQLite databases with `mode=ro` and `PRAGMA query_only=ON`; it reads usage columns, not messages/config/credentials, and never intentionally edits source databases or profile identity. SQLite may manage its own WAL/shared-memory metadata; normal SQLite access permissions still apply.
+No telemetry, external API requests, remote collection or cost lookup. The collector opens source SQLite databases with `mode=ro` and `PRAGMA query_only=ON`; it reads usage columns, not messages, and never intentionally edits source databases, configuration or profile identity. For optional labels it safely parses local profile configuration and selects only provider names and base URLs, never publishing credential fields or YAML error text. SQLite may manage its own WAL/shared-memory metadata; normal SQLite access permissions still apply.
 
 Its own state directory is mode `0700`; newly created state/log files use umask `077`. The private ledger stores session IDs, model/provider IDs, billing base URLs, counters and observations; error messages can contain local paths. Treat it as private, especially if a billing URL includes sensitive material. Do not publish state, logs or real screenshots. Existing preserved state files are not re-permissioned individually. The UI uses the native file-read bridge only, so no new listening port is opened.
 
@@ -90,6 +108,7 @@ All database rows, usage snapshots, profile names and test homes are **synthetic
 
 ```sh
 python3 checks/backend_checks.py
+python3 checks/provider_checks.py
 python3 checks/installer_checks.py
 npm ci --ignore-scripts
 npm run check

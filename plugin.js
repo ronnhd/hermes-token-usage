@@ -14,6 +14,9 @@ const fmt = n => Number(n || 0).toLocaleString('en-US')
 const when = (n, timezone = 'UTC') => n ? new Date(n * 1000).toLocaleString('en-GB', { timeZone: timezone }) + ' ' + timezone : 'unavailable'
 const button = { border: '1px solid var(--ui-stroke-secondary)', borderRadius: 5, padding: '4px 8px', color: 'var(--ui-text-secondary)', background: 'transparent', cursor: 'pointer' }
 const muted = { color: 'var(--ui-text-tertiary)', fontSize: 12 }
+const routeKey = r => r.identity || r.billing_provider
+const routeLabel = r => r.provider_label || r.billing_provider
+const routeDetails = r => `Raw ID: ${r.billing_provider} · ${r.endpoint || 'endpoint unavailable'} · route ${r.route_hint || 'unavailable'}${r.model ? ' · model ' + r.model : ''}${r.billing_mode ? ' · mode ' + r.billing_mode : ''}${r.task ? ' · task ' + r.task : ''} · ${r.attribution || 'stored provider ID'}${r.provider_candidates?.length ? ' · Candidates (not assigned): ' + r.provider_candidates.join(', ') : ''}`
 
 async function readSummary() {
   if (typeof CONFIG !== 'object' || typeof SUMMARY !== 'string') throw new Error('Run the installer to configure this plugin.')
@@ -63,11 +66,11 @@ function UsageTable({ rows }) {
   return jsx('div', { style: { overflowX: 'auto' }, children: jsx('table', {
     style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
     children: [
-      jsx('thead', { children: jsx('tr', { children: ['Billing provider (stored ID)', ...HEADERS].map(label => jsx('th', { style: { padding: 6, textAlign: label.startsWith('Billing') ? 'left' : 'right', borderBottom: '1px solid var(--ui-stroke-secondary)', color: 'var(--ui-text-tertiary)', whiteSpace: 'nowrap' }, children: label }, label)) }) }, 'head'),
+      jsx('thead', { children: jsx('tr', { children: ['Billing provider / route', ...HEADERS].map(label => jsx('th', { style: { padding: 6, textAlign: label.startsWith('Billing') ? 'left' : 'right', borderBottom: '1px solid var(--ui-stroke-secondary)', color: 'var(--ui-text-tertiary)', whiteSpace: 'nowrap' }, children: label }, label)) }) }, 'head'),
       jsx('tbody', { children: rows.map(r => jsx('tr', { children: [
-        jsx('td', { style: { padding: 6, fontFamily: 'monospace', overflowWrap: 'anywhere' }, children: r.billing_provider }, 'provider'),
+        jsx('td', { style: { padding: 6, fontFamily: 'monospace', overflowWrap: 'anywhere' }, children: [jsx('div', {children: routeLabel(r)}, 'label'), jsx('div', {style:muted,children:routeDetails(r)}, 'identity')] }, 'provider'),
         ...FIELDS.map(k => jsx('td', { style: { padding: 6, textAlign: 'right', whiteSpace: 'nowrap' }, children: fmt(r[k]) }, k))
-      ] }, r.billing_provider)) }, 'body')
+      ] }, routeKey(r))) }, 'body')
     ]
   }) })
 }
@@ -88,18 +91,20 @@ function Details() {
     q.isError ? jsx('p', { style: muted, children: 'Refresh failed: ' + String(q.error?.message || q.error) + '. Showing last cached data.' }, 'error') : null,
     ...Object.entries(d.sources).map(([profile, source]) => {
       const rows = p.groups.filter(r => r.profile === profile)
-      const map = new Map(rows.map(r => [r.billing_provider, r]))
-      for (const provider of source.providers || []) if (!map.has(provider)) map.set(provider, { billing_provider: provider })
+      const map = new Map(rows.map(r => [routeKey(r), r]))
+      const identities = source.provider_identities || (source.providers || []).map(provider => ({ billing_provider: provider }))
+      for (const identity of identities) if (!map.has(routeKey(identity))) map.set(routeKey(identity), identity)
       return jsx('section', { style: { borderTop: '1px solid var(--ui-stroke-secondary)', paddingTop: 10 }, children: [
         jsx('h3', { style: { fontSize: 14, fontWeight: 600, margin: '0 0 6px' }, children: `${profile} · ${fmt(rows.reduce((n,r) => n+r.total,0))} observed tokens${source.ok ? '' : ' · READ FAILED'}` }, 'name'),
         !source.ok ? jsx('p', { style: muted, children: source.error + ' (no zero-filled replacement; prior ledger retained)' }, 'error') : null,
-        jsx(UsageTable, { rows: [...map.values()].sort((a,b) => (b.total || 0)-(a.total || 0) || a.billing_provider.localeCompare(b.billing_provider)) }, 'table'),
+        source.config_ok === false ? jsx('p', {style:muted,children:source.config_status}, 'config') : null,
+        jsx(UsageTable, { rows: [...map.values()].sort((a,b) => (b.total || 0)-(a.total || 0) || routeLabel(a).localeCompare(routeLabel(b))) }, 'table'),
         jsx('p', { style: muted, children: source.ok ? `${source.row_count} source rows · zero rows mean no observed increment for this period, not zero historical usage.` : 'Source unavailable.' }, 'coverage')
       ] }, profile)
     }),
     jsx('section', { children: [
       jsx('h3', { style: { fontSize: 14, fontWeight: 600 }, children: `Boundary-ambiguous: ${fmt(p.boundary_ambiguous_total)} tokens (excluded from total)` }, 'title'),
-      p.boundary_ambiguous_groups.length ? jsx('div', { children: p.boundary_ambiguous_groups.map(r => jsx('p', { style: muted, children: `${r.profile} → ${r.billing_provider}: ${fmt(r.total)} tokens; input ${fmt(r.input_tokens)}, output ${fmt(r.output_tokens)}, cache read ${fmt(r.cache_read_tokens)}, cache write ${fmt(r.cache_write_tokens)}, reasoning ${fmt(r.reasoning_tokens)} (subset)` }, r.profile+':'+r.billing_provider)) }, 'ambiguous') : null,
+      p.boundary_ambiguous_groups.length ? jsx('div', { children: p.boundary_ambiguous_groups.map(r => jsx('p', { style: muted, children: `${r.profile} → ${routeLabel(r)}: ${fmt(r.total)} tokens; input ${fmt(r.input_tokens)}, output ${fmt(r.output_tokens)}, cache read ${fmt(r.cache_read_tokens)}, cache write ${fmt(r.cache_write_tokens)}, reasoning ${fmt(r.reasoning_tokens)} (subset) · ${routeDetails(r)}` }, r.profile+':'+routeKey(r))) }, 'ambiguous') : null,
       jsx('p', { style: muted, children: `Counter reset anomalies: ${d.anomaly_count}. Total = canonical uncached input + output + cache read + cache write. Reasoning is an output subset and is not added again.` }, 'accounting'),
       jsx('ul', { style: { ...muted, paddingLeft: 18 }, children: d.limitations.map(s => jsx('li', { children: s }, s)) }, 'limits')
     ] }, 'limitations')

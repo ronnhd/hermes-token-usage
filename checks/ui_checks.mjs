@@ -54,6 +54,18 @@ try {
   assert.match(document.body.textContent,/provider\/raw:fake/)
   assert.match(document.body.textContent,/Boundary-ambiguous: 9/)
   assert.match(document.body.textContent,/NOT complete historical/)
+  // Same raw provider, two routes: labels and zero rows must not collapse or duplicate.
+  const routeA = {...group, billing_provider:'custom', provider_label:'fake-named-a', identity:'fake-route-a', endpoint:'https://one.example', attribution:'unique exact endpoint', provider_candidates:[]}
+  const routeB = {...group, total:0, billing_provider:'custom', provider_label:'https://two.example · fake-route', identity:'fake-route-b', endpoint:'https://two.example', attribution:'ambiguous endpoint', provider_candidates:['fake-alias-one','fake-alias-two']}
+  snapshot.periods.day.groups = [routeA]
+  snapshot.sources['fake-profile'].providers = ['fake-named-a', routeB.provider_label]
+  snapshot.sources['fake-profile'].provider_identities = [routeA, routeB]
+  await act(async()=>mounted.render(page.render()))
+  assert.match(document.body.textContent,/fake-named-a/)
+  assert.match(document.body.textContent,/fake-alias-one, fake-alias-two/)
+  assert.equal(document.querySelectorAll('tbody tr').length,2, 'same resolver identity must prevent duplicate zero rows')
+  assert.match(document.body.textContent,/Raw ID: custom/)
+  assert.match(document.body.textContent,/https:\/\/one.example/)
   await act(async()=>[...document.querySelectorAll('button')].find(e=>e.textContent==='Week (Monday)').click())
   assert.match(document.body.textContent,/26 tokens/)
   await act(async()=>[...document.querySelectorAll('button')].find(e=>e.textContent==='Refresh').click())
