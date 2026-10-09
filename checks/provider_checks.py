@@ -10,6 +10,21 @@ b = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(b)
 
 class ProviderChecks(unittest.TestCase):
+    def test_provider_group_identity_excludes_model_task_mode_not_full_endpoint(self):
+        import json
+        def resolve(model, endpoint, mode='', task='', provider='custom'):
+            return b.resolve_provider(provider, json.dumps([model, provider, endpoint, mode, task]), {'alias-a': endpoint, 'alias-b': endpoint})
+        a = resolve('model-a', 'https://one.example/private-a')
+        other_model = resolve('model-b', 'https://one.example/private-a', 'other-mode', 'other-task')
+        other_endpoint = resolve('model-a', 'https://one.example/private-b')
+        self.assertIn('provider_identity', a, 'compact UI needs provider identity independent of route identity')
+        self.assertEqual(a['provider_identity'], other_model['provider_identity'])
+        self.assertNotEqual(a['identity'], other_model['identity'])
+        self.assertNotEqual(a['provider_identity'], other_endpoint['provider_identity'])
+        self.assertNotIn('private-a', json.dumps(a))
+        self.assertNotEqual(a['provider_identity'], resolve('model-a', 'https://one.example/private-a', provider='named')['provider_identity'])
+        self.assertNotEqual(a['provider_identity'], b.resolve_provider('custom', None)['provider_identity'])
+
     def test_explicit_zero_port_is_not_default_endpoint(self):
         self.assertNotEqual(b.normalized_endpoint('https://one.example:0/v1'), b.normalized_endpoint('https://one.example/v1'))
         self.assertEqual(b.normalized_endpoint('https://one.example:443/v1'), b.normalized_endpoint('https://one.example/v1'))

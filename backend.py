@@ -60,6 +60,9 @@ def resolve_provider(provider, route, configs=None):
     model, raw_provider, endpoint, mode, task = parts
     raw_provider = raw_provider or provider
     identity = hashlib.sha256(json.dumps([provider, parts, legacy], sort_keys=True).encode()).hexdigest()
+    # Group presentation independently of the evidence route. Full raw endpoint is
+    # private and exact (even two paths on one origin must not be merged).
+    provider_identity = hashlib.sha256(json.dumps([raw_provider, endpoint, legacy], sort_keys=True).encode()).hexdigest()
     named = raw_provider not in ('custom', 'Unknown', 'unknown', '')
     candidates = []
     match = 'raw provider ID' if named else 'unresolved'
@@ -78,7 +81,7 @@ def resolve_provider(provider, route, configs=None):
         else:
             label = safe_endpoint(endpoint) + ' · ' + identity[:10]
             match = 'ambiguous endpoint' if candidates else 'unmatched endpoint'
-    return {'identity': identity, 'billing_provider': safe_text(raw_provider), 'provider_label': label,
+    return {'identity': identity, 'provider_identity': provider_identity, 'billing_provider': safe_text(raw_provider), 'provider_label': label,
             'endpoint': safe_endpoint(endpoint), 'route_hint': identity[:10],
             'model': safe_text(model), 'billing_mode': safe_text(mode), 'task': safe_text(task),
             'attribution': match, 'provider_candidates': [safe_text(n) for n in candidates], 'legacy_unidentified': legacy}
