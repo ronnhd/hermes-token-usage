@@ -1,0 +1,16 @@
+{
+  "name": "hermes-token-usage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic UI checks only; runtime plugin needs no npm packages",
+  "scripts": {
+    "check": "node --check plugin.js && node checks/ui_checks.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "jsdom": "30.1.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}
