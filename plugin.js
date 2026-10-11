@@ -155,17 +155,92 @@ function combineHourly(days) {
   }
   return result
 }
+function getSplinePath(points) {
+  let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[Math.min(points.length - 1, i + 2)]
+    let cp1x = p1.x + (p2.x - p0.x) / 6
+    let cp1y = p1.y + (p2.y - p0.y) / 6
+    let cp2x = p2.x - (p3.x - p1.x) / 6
+    let cp2y = p2.y - (p3.y - p1.y) / 6
+    if (p1.y === 135 && p2.y === 135) {
+      cp1y = 135
+      cp2y = 135
+    } else {
+      cp1y = Math.min(135, Math.max(15, cp1y))
+      cp2y = Math.min(135, Math.max(15, cp2y))
+    }
+    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`
+  }
+  return d
+}
 function HourlyChart({ hourly }) {
   if (!Array.isArray(hourly) || hourly.length !== 24) return null
+  const [style, setStyle] = useState('wave')
   const peak = hourly.reduce((best, bucket) => bucket.total > best.total ? bucket : best, {hour:0,total:0,calls:0})
   const peakLabel = `${String(peak.hour).padStart(2,'0')}:00`
   const max = Math.max(1, peak.total)
-  const chartHeight = 64
+  const chartHeight = 120
+  const baseline = 135
+  const points = hourly.map(b => ({
+    x: 40 + b.hour * 28,
+    y: baseline - (b.total / max) * chartHeight,
+    bucket: b
+  }))
+  const lineD = getSplinePath(points)
+  const areaD = `${lineD} L ${points[points.length - 1].x.toFixed(1)} ${baseline} L ${points[0].x.toFixed(1)} ${baseline} Z`
+
   return jsx('details', {'data-hourly-chart':'', open:true, style:{border:'1px solid var(--ui-stroke-secondary)',borderRadius:6,padding:'6px 8px'}, children:[
-    jsx('summary',{style:{cursor:'pointer',fontSize:12,color:'var(--ui-text-secondary)'},children:`24h Activity · Peak: ${fmt(peak.total)} tokens at ${peakLabel}`},'summary'),
-    jsx('svg',{viewBox:'0 0 240 86',role:'img','aria-label':'24 hour token activity bar chart',style:{width:'100%',height:78,display:'block',marginTop:6},children:[
-      ...hourly.map(bucket => { const x=bucket.hour*10+1; const height=bucket.total ? Math.max(2,chartHeight*bucket.total/max) : 2; return jsx('rect',{x,y:4+chartHeight-height,width:8,height,rx:1,fill:bucket.total?'var(--ui-accent, #3b82f6)':'var(--ui-stroke-secondary)',children:jsx('title',{children:`${String(bucket.hour).padStart(2,'0')}:00 - ${String(bucket.hour).padStart(2,'0')}:59: ${fmt(bucket.total)} tokens · ${fmt(bucket.calls)} calls`})},`bar-${bucket.hour}`) }),
-      ...[0,4,8,12,16,20,23].map(hour => jsx('text',{x:hour*10+5,y:82,textAnchor:'middle',fill:'var(--ui-text-tertiary)',fontSize:5,children:`${String(hour).padStart(2,'0')}:00`},`axis-${hour}`))
+    jsx('summary',{style:{cursor:'pointer',fontSize:12,color:'var(--ui-text-secondary)',display:'flex',alignItems:'center',justifyContent:'space-between',userSelect:'none'},children:[
+      jsx('span',{children:`24h Activity · Peak: ${fmt(peak.total)} tokens at ${peakLabel}`},'title'),
+      jsx('div',{style:{display:'flex',gap:4,alignItems:'center'},children:[
+        jsx('button',{type:'button',style:{...button,padding:'2px 8px',fontSize:11,color:style==='wave'?'var(--ui-accent)':'var(--ui-text-secondary)',borderColor:style==='wave'?'var(--ui-accent)':'var(--ui-stroke-secondary)'},onClick:e=>{e.preventDefault();e.stopPropagation();setStyle('wave')},children:'Wave'},'toggle-wave'),
+        jsx('button',{type:'button',style:{...button,padding:'2px 8px',fontSize:11,color:style==='bars'?'var(--ui-accent)':'var(--ui-text-secondary)',borderColor:style==='bars'?'var(--ui-accent)':'var(--ui-stroke-secondary)'},onClick:e=>{e.preventDefault();e.stopPropagation();setStyle('bars')},children:'Bars'},'toggle-bars')
+      ]},'toggles')
+    ]},'summary'),
+    jsx('svg',{viewBox:'0 0 720 170',role:'img','aria-label':'24 hour token activity chart',style:{width:'100%',height:170,display:'block',marginTop:6},children:[
+      jsx('defs',{children:jsx('linearGradient',{id:'wave-grad',x1:'0',y1:'0',x2:'0',y2:'1',children:[
+        jsx('stop',{offset:'0%',stopColor:'var(--ui-accent)',stopOpacity:0.25},'stop-0'),
+        jsx('stop',{offset:'100%',stopColor:'var(--ui-accent)',stopOpacity:0.0},'stop-1')
+      ]},'grad')},'defs'),
+      jsx('line',{x1:28,y1:15,x2:692,y2:15,stroke:'var(--ui-stroke-secondary)',strokeDasharray:'4 4',opacity:0.4},'grid-100'),
+      jsx('line',{x1:28,y1:75,x2:692,y2:75,stroke:'var(--ui-stroke-secondary)',strokeDasharray:'4 4',opacity:0.4},'grid-50'),
+      ...(style === 'wave' ? [
+        jsx('path',{d:areaD,fill:'url(#wave-grad)'},'wave-area'),
+        jsx('path',{d:lineD,fill:'none',stroke:'var(--ui-accent, #3b82f6)',strokeWidth:2},'wave-line'),
+        ...points.filter(p => p.bucket.total > 0).map(p => jsx('circle',{
+          cx: p.x,
+          cy: p.y,
+          r: 3,
+          fill: 'var(--ui-accent)',
+          stroke: 'var(--ui-bg)',
+          children: jsx('title',{children:`${String(p.bucket.hour).padStart(2,'0')}:00 - ${String(p.bucket.hour).padStart(2,'0')}:59: ${fmt(p.bucket.total)} tokens · ${fmt(p.bucket.calls)} calls`})
+        },`circle-${p.bucket.hour}`))
+      ] : hourly.map(bucket => {
+        const x = 28 + bucket.hour * 28
+        const height = bucket.total ? Math.max(2, (bucket.total / max) * chartHeight) : 2
+        const y = baseline - height
+        return jsx('rect',{
+          x,
+          y,
+          width: 20,
+          height,
+          rx: 2,
+          fill: bucket.total ? 'var(--ui-accent, #3b82f6)' : 'var(--ui-stroke-secondary)',
+          children: jsx('title',{children:`${String(bucket.hour).padStart(2,'0')}:00 - ${String(bucket.hour).padStart(2,'0')}:59: ${fmt(bucket.total)} tokens · ${fmt(bucket.calls)} calls`})
+        },`bar-${bucket.hour}`)
+      })),
+      ...[0, 3, 6, 9, 12, 15, 18, 21, 23].map(hour => jsx('text',{
+        x: 40 + hour * 28,
+        y: 158,
+        textAnchor: 'middle',
+        fill: 'var(--ui-text-tertiary)',
+        fontSize: 10,
+        children: `${String(hour).padStart(2,'0')}:00`
+      },`axis-${hour}`))
     ]},'chart')
   ]})
 }
