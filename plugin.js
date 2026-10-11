@@ -58,9 +58,15 @@ async function readSummary() {
   if (!object(data) || data.schema_version !== 1 || !object(data.periods) || !object(data.sources) || !Number.isFinite(data.generated_at) || !count(data.anomaly_count) || !Array.isArray(data.limitations) || data.limitations.some(s => typeof s !== 'string')) invalid()
   if (typeof data.timezone !== 'string') invalid()
   try { new Intl.DateTimeFormat('en', { timeZone: data.timezone }) } catch { invalid() }
+  const hourly = value => {
+    if (value === undefined) return
+    if (!Array.isArray(value) || value.length !== 24) invalid()
+    for (const bucket of value) if (!object(bucket) || !Number.isInteger(bucket.hour) || bucket.hour < 0 || bucket.hour > 23 || !count(bucket.total) || !count(bucket.calls)) invalid()
+  }
   for (const period of ['day', 'week', 'month']) {
     const p = data.periods[period]
     if (!object(p) || !Number.isFinite(p.start) || !count(p.total) || !count(p.boundary_ambiguous_total)) invalid()
+    hourly(p.hourly)
     for (const rows of [p.groups, p.boundary_ambiguous_groups]) {
       if (!Array.isArray(rows)) invalid()
       for (const row of rows) if (!object(row) || typeof row.profile !== 'string' || typeof row.billing_provider !== 'string' || FIELDS.some(k => !count(row[k]))) invalid()
@@ -70,6 +76,7 @@ async function readSummary() {
     if (!object(data.days)) invalid()
     for (const [key, day] of Object.entries(data.days)) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !object(day) || !Number.isFinite(day.start) || !count(day.total) || !count(day.boundary_ambiguous_total)) invalid()
+      hourly(day.hourly)
       for (const rows of [day.groups, day.boundary_ambiguous_groups]) {
         if (!Array.isArray(rows)) invalid()
         for (const row of rows) if (!object(row) || typeof row.profile !== 'string' || typeof row.billing_provider !== 'string' || FIELDS.some(k => !count(row[k]))) invalid()
@@ -136,6 +143,32 @@ function CompactTable({ rows, denominator, models = false }) {
     ]},r.key || r.model))},'body')
   ]})
 }
+function combineHourly(days) {
+  const available = days.map(day => day?.hourly).filter(Array.isArray)
+  if (!available.length) return undefined
+  const result = Array.from({length:24}, (_, hour) => ({hour,total:0,calls:0}))
+  for (const hourly of available) for (const bucket of hourly) {
+    if (bucket.hour >= 0 && bucket.hour < 24) {
+      result[bucket.hour].total += bucket.total
+      result[bucket.hour].calls += bucket.calls
+    }
+  }
+  return result
+}
+function HourlyChart({ hourly }) {
+  if (!Array.isArray(hourly) || hourly.length !== 24) return null
+  const peak = hourly.reduce((best, bucket) => bucket.total > best.total ? bucket : best, {hour:0,total:0,calls:0})
+  const peakLabel = `${String(peak.hour).padStart(2,'0')}:00`
+  const max = Math.max(1, peak.total)
+  const chartHeight = 64
+  return jsx('details', {'data-hourly-chart':'', open:true, style:{border:'1px solid var(--ui-stroke-secondary)',borderRadius:6,padding:'6px 8px'}, children:[
+    jsx('summary',{style:{cursor:'pointer',fontSize:12,color:'var(--ui-text-secondary)'},children:`24h Activity · Peak: ${fmt(peak.total)} tokens at ${peakLabel}`},'summary'),
+    jsx('svg',{viewBox:'0 0 240 86',role:'img','aria-label':'24 hour token activity bar chart',style:{width:'100%',height:78,display:'block',marginTop:6},children:[
+      ...hourly.map(bucket => { const x=bucket.hour*10+1; const height=bucket.total ? Math.max(2,chartHeight*bucket.total/max) : 2; return jsx('rect',{x,y:4+chartHeight-height,width:8,height,rx:1,fill:bucket.total?'var(--ui-accent, #3b82f6)':'var(--ui-stroke-secondary)',children:jsx('title',{children:`${String(bucket.hour).padStart(2,'0')}:00 - ${String(bucket.hour).padStart(2,'0')}:59: ${fmt(bucket.total)} tokens · ${fmt(bucket.calls)} calls`})},`bar-${bucket.hour}`) }),
+      ...[0,4,8,12,16,20,23].map(hour => jsx('text',{x:hour*10+5,y:82,textAnchor:'middle',fill:'var(--ui-text-tertiary)',fontSize:5,children:`${String(hour).padStart(2,'0')}:00`},`axis-${hour}`))
+    ]},'chart')
+  ]})
+}
 function dateKey(timestamp, timezone) {
   const parts = new Intl.DateTimeFormat('en', {timeZone: timezone, year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date(timestamp * 1000))
   return `${parts.find(p=>p.type==='year').value}-${parts.find(p=>p.type==='month').value}-${parts.find(p=>p.type==='day').value}`
@@ -158,7 +191,10 @@ function selectionFor(data, preset, fromDate, toDate) {
   const legacy = {today:'day', 'this-week':'week', 'this-month':'month'}
   if (legacy[preset]) {
     const period = data.periods[legacy[preset]]
-    return {label:{today:'Today', 'this-week':'This week', 'this-month':'This month'}[preset], start:dateKey(period.start, data.timezone), groups:period.groups, ambiguous:period.boundary_ambiguous_groups, startTimestamp:period.start}
+    const periodStart = dateKey(period.start, data.timezone)
+    const days = data.days || {}
+    const selectedDays = dateRange(periodStart, today).map(key => days[key]).filter(Boolean)
+    return {label:{today:'Today', 'this-week':'This week', 'this-month':'This month'}[preset], start:periodStart, groups:period.groups, ambiguous:period.boundary_ambiguous_groups, hourly:preset === 'today' ? (period.hourly || combineHourly(selectedDays)) : (combineHourly(selectedDays) || period.hourly), startTimestamp:period.start}
   }
   let start = today
   let end = today
@@ -171,8 +207,8 @@ function selectionFor(data, preset, fromDate, toDate) {
     if (start > end) [start, end] = [end, start]
   }
   const days = data.days || {}
-  const selected = dateRange(start, end).map(key => days[key]).filter(Boolean)
-  return {label:preset === 'custom' ? dateLabel(start, end) : ({yesterday:'Yesterday','last-7':'Last 7 days','last-30':'Last 30 days'}[preset] || dateLabel(start, end)), start, groups:selected.flatMap(day=>day.groups), ambiguous:selected.flatMap(day=>day.boundary_ambiguous_groups), startTimestamp:selected[0]?.start || null}
+  const selectedDays = dateRange(start, end).map(key => days[key]).filter(Boolean)
+  return {label:preset === 'custom' ? dateLabel(start, end) : ({yesterday:'Yesterday','last-7':'Last 7 days','last-30':'Last 30 days'}[preset] || dateLabel(start, end)), groups:selectedDays.flatMap(day=>day.groups), ambiguous:selectedDays.flatMap(day=>day.boundary_ambiguous_groups), hourly:combineHourly(selectedDays), startTimestamp:selectedDays[0]?.start || null}
 }
 function Details() {
   const q = useSummary()
@@ -204,6 +240,7 @@ function Details() {
       jsx('select',{'aria-label':'Profile',value:profile,onChange:e=>setProfile(e.target.value),style:{...button,background:'var(--ui-bg)'},children:[jsx('option',{value:'',children:'All profiles'},'all'),...profiles.map(name=>jsx('option',{value:name,children:name},name))]},'profile'),
       jsx('button',{type:'button',style:button,disabled:q.isFetching,onClick:()=>q.refetch(),children:q.isFetching?'Refreshing…':'Refresh'},'refresh')
     ]},'header'),
+    selection.hourly ? jsx(HourlyChart,{hourly:selection.hourly},'hourly') : jsx('div',{style:muted,children:'Hourly activity unavailable for this snapshot.'},'hourly-fallback'),
     jsx('div',{role:'tablist','aria-label':'Usage views',style:{display:'flex',gap:6},children:['Providers','Top models'].map(name=>jsx('button',{type:'button',role:'tab','aria-selected':tab===name,style:{...button,color:tab===name?'var(--ui-accent)':'var(--ui-text-secondary)'},onClick:()=>setTab(name),children:name},name))},'tabs'),
     jsx('div',{style:muted,children:`${selection.label} · ${fmt(usage.total)} tokens · Share denominator: ${fmt(usage.total)} confirmed selected tokens · ${d.timezone} · ${status(d)}`},'summary'),
     q.isError?jsx('p',{style:muted,children:'Refresh failed: '+String(q.error?.message || q.error)+'. Showing last cached data.'},'error'):null,

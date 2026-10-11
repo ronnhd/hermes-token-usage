@@ -156,37 +156,47 @@ class Ledger:
             (lower_bound, now),
         ))
 
-        def aggregate(start, end=now):
+        def aggregate(start, end=now, include_hourly=False):
             groups = {}
             ambiguous = {}
+            hourly = [{'hour': hour, 'total': 0, 'calls': 0} for hour in range(24)] if include_hourly else None
             for profile, provider, lo, hi, raw, route in rows:
                 if hi < start or hi > end:
                     continue
-                target = groups if lo >= start else ambiguous
+                counts = json.loads(raw)
+                confirmed = lo >= start
+                target = groups if confirmed else ambiguous
                 identity = resolve_provider(provider, route, self.provider_configs.get(profile, {}))
                 group = target.setdefault(
                     (profile, identity['identity']),
                     dict(profile=profile, **identity, **dict.fromkeys(COUNTERS, 0)),
                 )
-                for key, value in zip(COUNTERS, json.loads(raw)):
+                for key, value in zip(COUNTERS, counts):
                     group[key] += value
+                if hourly is not None and confirmed:
+                    bucket = hourly[dt.datetime.fromtimestamp(hi, self.tz).hour]
+                    bucket['total'] += sum(counts[:4])
+                    bucket['calls'] += counts[5]
             for group in [*groups.values(), *ambiguous.values()]:
                 group['total'] = sum(group[key] for key in COUNTERS[:4])
-            return {
+            result = {
                 'start': start,
                 'groups': list(groups.values()),
                 'total': sum(group['total'] for group in groups.values()),
                 'boundary_ambiguous_groups': list(ambiguous.values()),
                 'boundary_ambiguous_total': sum(group['total'] for group in ambiguous.values()),
             }
+            if hourly is not None:
+                result['hourly'] = hourly
+            return result
 
-        periods = {period: aggregate(start) for period, start in starts.items()}
+        periods = {period: aggregate(start, include_hourly=(period == 'day')) for period, start in starts.items()}
         days = {}
         for offset in range(60):
             date = cutoff_date + dt.timedelta(days=offset)
             start = dt.datetime.combine(date, dt.time.min, tzinfo=self.tz).timestamp()
             next_start = dt.datetime.combine(date + dt.timedelta(days=1), dt.time.min, tzinfo=self.tz).timestamp()
-            days[date.isoformat()] = aggregate(start, min(next_start - 1e-9, now))
+            days[date.isoformat()] = aggregate(start, min(next_start - 1e-9, now), include_hourly=True)
         # Keep the calendar-day entry byte-for-byte equivalent to the legacy day
         # period, including its boundary handling and group ordering.
         days[today.isoformat()] = periods['day']

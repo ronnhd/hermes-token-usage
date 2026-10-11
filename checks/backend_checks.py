@@ -60,6 +60,31 @@ class Checks(unittest.TestCase):
             self.assertEqual(result['days']['1970-01-01']['boundary_ambiguous_total'], 0)
             ledger.db.close()
 
+    def test_hourly_aggregation_conserves_confirmed_day_and_uses_local_timezone(self):
+        with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
+            ledger = b.Ledger(pathlib.Path(tmp) / 'ledger.db', timezone='Asia/Bangkok')
+            row = {**dict.fromkeys(b.COUNTERS, 0), 'session_id': 'fake', 'billing_provider': 'provider', 'input_tokens': 10, 'api_call_count': 2}
+            # Two confirmed deltas at 00:15 and 13:20 Bangkok, each with a same-day baseline.
+            first = dt.datetime(2026, 5, 3, 0, 15, tzinfo=dt.timezone(dt.timedelta(hours=7))).timestamp()
+            second_baseline = dt.datetime(2026, 5, 3, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=7))).timestamp()
+            second = dt.datetime(2026, 5, 3, 13, 20, tzinfo=dt.timezone(dt.timedelta(hours=7))).timestamp()
+            ledger.observe('fake', [row], dt.datetime(2026, 5, 3, 0, 1, tzinfo=dt.timezone(dt.timedelta(hours=7))).timestamp(), observed_start=first - 60)
+            ledger.observe('fake', [{**row, 'input_tokens': 16, 'api_call_count': 5}], first)
+            second_row = {**row, 'session_id': 'fake-second'}
+            ledger.observe('fake', [second_row], second_baseline, observed_start=second_baseline)
+            ledger.observe('fake', [{**second_row, 'input_tokens': 16, 'api_call_count': 5}], second)
+            result = ledger.summary(second + 1)
+            day = result['periods']['day']
+            hourly = day['hourly']
+            self.assertEqual(len(hourly), 24)
+            self.assertEqual([bucket['hour'] for bucket in hourly], list(range(24)))
+            self.assertEqual(hourly[0], {'hour': 0, 'total': 6, 'calls': 3})
+            self.assertEqual(hourly[13], {'hour': 13, 'total': 6, 'calls': 3})
+            self.assertEqual(sum(bucket['total'] for bucket in hourly), day['total'])
+            self.assertEqual(sum(bucket['calls'] for bucket in hourly), 6)
+            self.assertEqual(result['days']['2026-05-03'], day)
+            ledger.db.close()
+
     def test_days_cutoff_is_last_sixty_calendar_days(self):
         with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
             ledger = b.Ledger(pathlib.Path(tmp) / 'ledger.db', timezone='UTC')

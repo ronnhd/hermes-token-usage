@@ -19,7 +19,8 @@ globalThis.document = dom.window.document
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 let navigated, refreshes = 0
 const group = {profile:'fake-profile', billing_provider:'provider/raw:fake', total:16, input_tokens:7, output_tokens:4, cache_read_tokens:3, cache_write_tokens:2, reasoning_tokens:2, api_call_count:1}
-const period = total => ({start:100, total, groups:[{...group, total}], boundary_ambiguous_total:9, boundary_ambiguous_groups:[{...group,total:9}]})
+const hourly = total => Array.from({length:24},(_,hour)=>({hour,total:hour===3?total:0,calls:hour===3?2:0}))
+const period = total => ({start:100, total, hourly:hourly(total), groups:[{...group, total}], boundary_ambiguous_total:9, boundary_ambiguous_groups:[{...group,total:9}]})
 const snapshot = {schema_version:1, generated_at:Date.now()/1000, installed_at:100, timezone:'UTC', periods:{day:period(16),week:period(26),month:period(36)}, days:{}, anomaly_count:1, sources:{'fake-profile':{ok:true,row_count:1,providers:['provider/raw:fake']}}, limitations:['Synthetic fixture: reasoning is a subset.']}
 const dateKey = timestamp => new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp*1000))
 const shiftDate = (key, amount) => { const value=new Date(`${key}T00:00:00Z`); value.setUTCDate(value.getUTCDate()+amount); return value.toISOString().slice(0,10) }
@@ -71,7 +72,7 @@ try {
   delete legacySnapshot.days
   window.hermesDesktop.readFileText=async()=>({text:JSON.stringify(legacySnapshot)})
   assert.deepEqual(await mod.readSummary(), legacySnapshot)
-  for(const response of [{binary:true,text:'{}'},{truncated:true,text:'{}'},{error:'missing'},{text:'{bad'},{text:'{"schema_version":2}'},{text:JSON.stringify({...snapshot, periods:{}})},{text:JSON.stringify({...snapshot, timezone:'invalid/fake'})}]){
+  for(const response of [{binary:true,text:'{}'},{truncated:true,text:'{}'},{error:'missing'},{text:'{bad'},{text:'{"schema_version":2}'},{text:JSON.stringify({...snapshot, periods:{}})},{text:JSON.stringify({...snapshot, periods:{...snapshot.periods, day:{...snapshot.periods.day, hourly:[]}}})},{text:JSON.stringify({...snapshot, periods:{...snapshot.periods, day:{...snapshot.periods.day, hourly:hourly(16).map((bucket,index)=>index===3?{...bucket,calls:-1}:bucket)}}})},{text:JSON.stringify({...snapshot, timezone:'invalid/fake'})}]){
     window.hermesDesktop.readFileText=async()=>response
     await assert.rejects(mod.readSummary())
   }
@@ -94,6 +95,10 @@ try {
   const chooseRange = async value => { const control=document.querySelector('select[aria-label="Date range"]'); control.value=value; await act(async()=>control.dispatchEvent(new dom.window.Event('change',{bubbles:true}))) }
   await act(async()=>mounted.render(page.render()))
   assert.equal(document.querySelector('[role=tab][aria-selected=true]').textContent,'Providers')
+  assert.ok(document.querySelector('[data-hourly-chart]'))
+  assert.equal(document.querySelectorAll('[data-hourly-chart] rect').length,24)
+  assert.match(document.querySelector('[data-hourly-chart] summary').textContent,/Peak: 159 tokens at 03:00/)
+  assert.match(Array.from(document.querySelectorAll('[data-hourly-chart] title')).find(title=>title.textContent.includes('03:00')).textContent,/03:00 - 03:59: 159 tokens · 2 calls/)
   assert.equal(document.querySelectorAll('[data-provider-row]').length,6)
   assert.equal(document.querySelectorAll('[data-profile]').length,2)
   assert.equal(document.querySelectorAll('[data-provider-row]')[0].textContent.includes('30'),true)
@@ -143,6 +148,10 @@ try {
   await act(async()=>setDateInput(toDate,todayKey))
   const customSelection=mod.selectionFor(snapshot,'custom',shiftDate(todayKey,-2),todayKey)
   assert.equal(mod.aggregateUsage(customSelection.groups).total,177)
+  assert.equal(customSelection.hourly.length,24)
+  assert.equal(customSelection.hourly[3].total,177)
+  const missingHourly={...snapshot,periods:{...snapshot.periods,day:{...snapshot.periods.day,hourly:undefined}},days:{}}
+  assert.equal(mod.selectionFor(missingHourly,'today').hourly,undefined)
   await chooseRange('this-month')
   await act(async()=>{select.value='';select.dispatchEvent(new dom.window.Event('change',{bubbles:true}))})
   assert.match(document.body.textContent,/36 confirmed selected tokens/)
