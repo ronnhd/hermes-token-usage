@@ -19,7 +19,7 @@ globalThis.document = dom.window.document
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 let navigated, refreshes = 0
 const group = {profile:'fake-profile', billing_provider:'provider/raw:fake', total:16, input_tokens:7, output_tokens:4, cache_read_tokens:3, cache_write_tokens:2, reasoning_tokens:2, api_call_count:1}
-const hourly = total => Array.from({length:24},(_,hour)=>({hour,total:hour===3?total:0,calls:hour===3?2:0}))
+const hourly = total => Array.from({length:24},(_,hour)=>({hour,total:hour===3?total:0,calls:hour===3?2:0,providers:hour===3?[{identity:'provider-a',label:'Provider Alpha',total:Math.max(0,total-6)},{identity:'provider-b',label:'Provider Beta',total:Math.min(total,6)}]:[]}))
 const period = total => ({start:100, total, hourly:hourly(total), groups:[{...group, total}], boundary_ambiguous_total:9, boundary_ambiguous_groups:[{...group,total:9}]})
 const snapshot = {schema_version:1, generated_at:Date.now()/1000, installed_at:100, timezone:'UTC', periods:{day:period(16),week:period(26),month:period(36)}, days:{}, anomaly_count:1, sources:{'fake-profile':{ok:true,row_count:1,providers:['provider/raw:fake']}}, limitations:['Synthetic fixture: reasoning is a subset.']}
 const dateKey = timestamp => new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp*1000))
@@ -33,7 +33,7 @@ globalThis.__usageNavigate = path => {navigated = path}
 const tmp = mkdtempSync(join(rootDir, '.ui-checks-'))
 let mounted
 try {
-  await build({stdin:{contents:source.replace("'__HERMES_TOKEN_USAGE_CONFIG__'", JSON.stringify({summaryPath:'/synthetic/summary.json',timezone:'UTC'})) + '\nexport { readSummary, aggregateUsage, selectionFor };',resolveDir:rootDir,sourcefile:'plugin.js'},bundle:true,format:'esm',platform:'node',external:['react','react/jsx-runtime'],outfile:join(tmp,'plugin.mjs'),plugins:[{name:'synthetic-sdk', setup(b){b.onResolve({filter:/^@hermes\/plugin-sdk$/},()=>({path:'sdk',namespace:'shim'}));b.onLoad({filter:/.*/,namespace:'shim'},()=>({contents:'export const ROUTES_AREA="routes", SIDEBAR_NAV_AREA="sidebar.nav", PALETTE_AREA="palette"; export const host={navigate:p=>globalThis.__usageNavigate(p)}; export const useQuery=o=>{globalThis.__usageQueryOptions=o; return globalThis.__usageQuery};',loader:'js'}))}}]})
+  await build({stdin:{contents:source.replace("'__HERMES_TOKEN_USAGE_CONFIG__'", JSON.stringify({summaryPath:'/synthetic/summary.json',timezone:'UTC'})) + '\nexport { readSummary, aggregateUsage, selectionFor, combineHourly };',resolveDir:rootDir,sourcefile:'plugin.js'},bundle:true,format:'esm',platform:'node',external:['react','react/jsx-runtime'],outfile:join(tmp,'plugin.mjs'),plugins:[{name:'synthetic-sdk', setup(b){b.onResolve({filter:/^@hermes\/plugin-sdk$/},()=>({path:'sdk',namespace:'shim'}));b.onLoad({filter:/.*/,namespace:'shim'},()=>({contents:'export const ROUTES_AREA="routes", SIDEBAR_NAV_AREA="sidebar.nav", PALETTE_AREA="palette"; export const host={navigate:p=>globalThis.__usageNavigate(p)}; export const useQuery=o=>{globalThis.__usageQueryOptions=o; return globalThis.__usageQuery};',loader:'js'}))}}]})
   const mod = await import(pathToFileURL(join(tmp,'plugin.mjs')))
   const route = (profile, provider_identity, model, total, extra={}) => ({...group, profile, provider_identity, identity:profile+provider_identity+model+JSON.stringify(extra), model, total, input_tokens:total?total-4:0, output_tokens:total?2:0, cache_read_tokens:total?1:0, cache_write_tokens:total?1:0, reasoning_tokens:total?2:0, api_call_count:total?1:0, provider_label:'same-label', attribution:'explicit provider ID', ...extra})
   const rows = [route('alpha','p1','exact/model',10), route('alpha','p1','other/model',20,{task:'aux',billing_mode:'other'}),route('alpha','p2','exact/model',30),route('beta','p1','exact/model',40),route('alpha','zero','zero',0),route('alpha','legacy','',15,{legacy_unidentified:true,attribution:'legacy unidentified'}),route('alpha','unknown','known/model',5,{billing_provider:'Unknown',attribution:'unresolved'})]
@@ -68,11 +68,16 @@ try {
   window.hermesDesktop={readFileText:async path=>{readPath=path; return {text:JSON.stringify(snapshot)}}}
   assert.deepEqual(await mod.readSummary(), snapshot)
   assert.equal(readPath,'/synthetic/summary.json')
+  const combined = mod.combineHourly([snapshot.days[todayKey], snapshot.days[shiftDate(todayKey,-1)], snapshot.days[shiftDate(todayKey,-2)]])
+  assert.equal(combined[3].total, 26)
+  assert.equal(combined[3].providers.reduce((n,p)=>n+p.total,0), 26)
+  assert.deepEqual(combined[3].providers.map(p=>p.identity), ['provider-b','provider-a'])
+  assert.equal(combined.reduce((n,b)=>n+b.providers.reduce((v,p)=>v+p.total,0),0), 26)
   const legacySnapshot={...snapshot}
   delete legacySnapshot.days
   window.hermesDesktop.readFileText=async()=>({text:JSON.stringify(legacySnapshot)})
   assert.deepEqual(await mod.readSummary(), legacySnapshot)
-  for(const response of [{binary:true,text:'{}'},{truncated:true,text:'{}'},{error:'missing'},{text:'{bad'},{text:'{"schema_version":2}'},{text:JSON.stringify({...snapshot, periods:{}})},{text:JSON.stringify({...snapshot, periods:{...snapshot.periods, day:{...snapshot.periods.day, hourly:[]}}})},{text:JSON.stringify({...snapshot, periods:{...snapshot.periods, day:{...snapshot.periods.day, hourly:hourly(16).map((bucket,index)=>index===3?{...bucket,calls:-1}:bucket)}}})},{text:JSON.stringify({...snapshot, timezone:'invalid/fake'})}]){
+  for(const response of [{binary:true,text:'{}'},{truncated:true,text:'{}'},{error:'missing'},{text:'{bad'},{text:'{"schema_version":2}'},{text:JSON.stringify({...snapshot, periods:{}})},{text:JSON.stringify({...snapshot, periods:{...snapshot.periods, day:{...snapshot.periods.day, hourly:[]}}})},{text:JSON.stringify({...snapshot, periods:{...snapshot.periods, day:{...snapshot.periods.day, hourly:hourly(16).map((bucket,index)=>index===3?{...bucket,calls:-1}:bucket)}}})},{text:JSON.stringify({...snapshot, periods:{...snapshot.periods, day:{...snapshot.periods.day, hourly:hourly(16).map((bucket,index)=>index===3?{...bucket,providers:[{identity:'only',label:'Only',total:1}]}:bucket)}}})},{text:JSON.stringify({...snapshot, timezone:'invalid/fake'})}]){
     window.hermesDesktop.readFileText=async()=>response
     await assert.rejects(mod.readSummary())
   }
@@ -99,11 +104,24 @@ try {
   assert.equal(document.querySelectorAll('[data-hourly-chart] path').length,2)
   assert.equal(document.querySelectorAll('[data-hourly-chart] circle').length,1)
   assert.match(document.querySelector('[data-hourly-chart] summary').textContent,/Peak: 159 tokens at 03:00/)
-  assert.match(Array.from(document.querySelectorAll('[data-hourly-chart] title')).find(title=>title.textContent.includes('03:00')).textContent,/03:00 - 03:59: 159 tokens · 2 calls/)
+  assert.ok([...document.querySelectorAll('[data-hourly-chart] text')].some(e=>e.textContent==='159'), 'Y axis includes the maximum label')
+  assert.ok([...document.querySelectorAll('[data-hourly-chart] text')].some(e=>e.textContent==='79.5'), 'Y axis includes half maximum label')
+  assert.ok([...document.querySelectorAll('[data-hourly-chart] text')].some(e=>e.textContent==='0'), 'Y axis includes baseline label')
+  const waveTitle=Array.from(document.querySelectorAll('[data-hourly-chart] title')).find(title=>title.textContent.includes('03:00')).textContent
+  assert.match(waveTitle,/03:00 - 03:59/)
+  assert.match(waveTitle,/Total tokens: 159/)
+  assert.match(waveTitle,/Calls: 2/)
+  assert.match(waveTitle,/Provider Alpha: 153 tokens/)
+  assert.match(waveTitle,/Provider Beta: 6 tokens/)
   await click('Bars')
   assert.equal(document.querySelectorAll('[data-hourly-chart] rect').length,24)
   assert.equal(document.querySelector('[data-hourly-chart]').open,true)
-  assert.match(Array.from(document.querySelectorAll('[data-hourly-chart] title')).find(title=>title.textContent.includes('03:00')).textContent,/03:00 - 03:59: 159 tokens · 2 calls/)
+  const barsTitle=Array.from(document.querySelectorAll('[data-hourly-chart] title')).find(title=>title.textContent.includes('03:00')).textContent
+  assert.match(barsTitle,/03:00 - 03:59/)
+  assert.match(barsTitle,/Total tokens: 159/)
+  assert.match(barsTitle,/Calls: 2/)
+  assert.match(barsTitle,/Provider Alpha: 153 tokens/)
+  assert.match(barsTitle,/Provider Beta: 6 tokens/)
   await click('Wave')
   assert.equal(document.querySelectorAll('[data-hourly-chart] path').length,2)
   assert.equal(document.querySelectorAll('[data-hourly-chart] circle').length,1)

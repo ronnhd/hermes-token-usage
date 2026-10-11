@@ -61,7 +61,15 @@ async function readSummary() {
   const hourly = value => {
     if (value === undefined) return
     if (!Array.isArray(value) || value.length !== 24) invalid()
-    for (const bucket of value) if (!object(bucket) || !Number.isInteger(bucket.hour) || bucket.hour < 0 || bucket.hour > 23 || !count(bucket.total) || !count(bucket.calls)) invalid()
+    for (const bucket of value) {
+      if (!object(bucket) || !Number.isInteger(bucket.hour) || bucket.hour < 0 || bucket.hour > 23 || !count(bucket.total) || !count(bucket.calls) || !Array.isArray(bucket.providers)) invalid()
+      const identities = new Set()
+      for (const provider of bucket.providers) {
+        if (!object(provider) || typeof provider.identity !== 'string' || !provider.identity || typeof provider.label !== 'string' || !provider.label || !count(provider.total) || identities.has(provider.identity)) invalid()
+        identities.add(provider.identity)
+      }
+      if (bucket.providers.reduce((total, provider) => total + provider.total, 0) !== bucket.total) invalid()
+    }
   }
   for (const period of ['day', 'week', 'month']) {
     const p = data.periods[period]
@@ -146,15 +154,32 @@ function CompactTable({ rows, denominator, models = false }) {
 function combineHourly(days) {
   const available = days.map(day => day?.hourly).filter(Array.isArray)
   if (!available.length) return undefined
-  const result = Array.from({length:24}, (_, hour) => ({hour,total:0,calls:0}))
+  const result = Array.from({length:24}, (_, hour) => ({hour,total:0,calls:0,providers:[]}))
   for (const hourly of available) for (const bucket of hourly) {
     if (bucket.hour >= 0 && bucket.hour < 24) {
-      result[bucket.hour].total += bucket.total
-      result[bucket.hour].calls += bucket.calls
+      const target = result[bucket.hour]
+      target.total += bucket.total
+      target.calls += bucket.calls
+      for (const provider of bucket.providers || []) {
+        let combined = target.providers.find(item => item.identity === provider.identity)
+        if (!combined) {
+          combined = {identity:provider.identity,label:provider.label,total:0}
+          target.providers.push(combined)
+        }
+        combined.total += provider.total
+      }
+      target.providers.sort((a,b) => b.total-a.total || a.identity.localeCompare(b.identity))
     }
   }
+  for (const bucket of result) if (bucket.providers.reduce((total, provider) => total + provider.total, 0) !== bucket.total) throw new Error('Combined hourly provider totals do not conserve bucket total')
   return result
 }
+const chartTitle = bucket => [
+  `${String(bucket.hour).padStart(2,'0')}:00 - ${String(bucket.hour).padStart(2,'0')}:59`,
+  `Total tokens: ${fmt(bucket.total)}`,
+  `Calls: ${fmt(bucket.calls)}`,
+  ...(bucket.providers || []).slice().sort((a,b) => b.total-a.total || a.identity.localeCompare(b.identity)).map(provider => `${provider.label}: ${fmt(provider.total)} tokens`)
+].join('\n')
 function getSplinePath(points) {
   let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`
   for (let i = 0; i < points.length - 1; i++) {
@@ -185,8 +210,11 @@ function HourlyChart({ hourly }) {
   const max = Math.max(1, peak.total)
   const chartHeight = 120
   const baseline = 135
+  const plotLeft = 64
+  const plotRight = 704
+  const step = (plotRight - plotLeft) / 23
   const points = hourly.map(b => ({
-    x: 40 + b.hour * 28,
+    x: plotLeft + b.hour * step,
     y: baseline - (b.total / max) * chartHeight,
     bucket: b
   }))
@@ -206,8 +234,14 @@ function HourlyChart({ hourly }) {
         jsx('stop',{offset:'0%',stopColor:'var(--ui-accent)',stopOpacity:0.25},'stop-0'),
         jsx('stop',{offset:'100%',stopColor:'var(--ui-accent)',stopOpacity:0.0},'stop-1')
       ]},'grad')},'defs'),
-      jsx('line',{x1:28,y1:15,x2:692,y2:15,stroke:'var(--ui-stroke-secondary)',strokeDasharray:'4 4',opacity:0.4},'grid-100'),
-      jsx('line',{x1:28,y1:75,x2:692,y2:75,stroke:'var(--ui-stroke-secondary)',strokeDasharray:'4 4',opacity:0.4},'grid-50'),
+      jsx('line',{x1:plotLeft,y1:15,x2:plotRight,y2:15,stroke:'var(--ui-stroke-secondary)',strokeDasharray:'4 4',opacity:0.4},'grid-100'),
+      jsx('line',{x1:plotLeft,y1:75,x2:plotRight,y2:75,stroke:'var(--ui-stroke-secondary)',strokeDasharray:'4 4',opacity:0.4},'grid-50'),
+      jsx('line',{x1:plotLeft,y1:baseline,x2:plotRight,y2:baseline,stroke:'var(--ui-stroke-secondary)',strokeDasharray:'4 4',opacity:0.4},'grid-0'),
+      ...[
+        [15,compact(max),'axis-max'],
+        [75,compact(max / 2),'axis-half'],
+        [baseline,'0','axis-zero']
+      ].map(([y,label,key]) => jsx('text',{x:58,y:y+3,textAnchor:'end',fill:'var(--ui-text-tertiary)',fontSize:10,children:label},key)),
       ...(style === 'wave' ? [
         jsx('path',{d:areaD,fill:'url(#wave-grad)'},'wave-area'),
         jsx('path',{d:lineD,fill:'none',stroke:'var(--ui-accent, #3b82f6)',strokeWidth:2},'wave-line'),
@@ -217,10 +251,10 @@ function HourlyChart({ hourly }) {
           r: 3,
           fill: 'var(--ui-accent)',
           stroke: 'var(--ui-bg)',
-          children: jsx('title',{children:`${String(p.bucket.hour).padStart(2,'0')}:00 - ${String(p.bucket.hour).padStart(2,'0')}:59: ${fmt(p.bucket.total)} tokens · ${fmt(p.bucket.calls)} calls`})
+          children: jsx('title',{children:chartTitle(p.bucket)})
         },`circle-${p.bucket.hour}`))
       ] : hourly.map(bucket => {
-        const x = 28 + bucket.hour * 28
+        const x = plotLeft + bucket.hour * step - 10
         const height = bucket.total ? Math.max(2, (bucket.total / max) * chartHeight) : 2
         const y = baseline - height
         return jsx('rect',{
@@ -230,11 +264,11 @@ function HourlyChart({ hourly }) {
           height,
           rx: 2,
           fill: bucket.total ? 'var(--ui-accent, #3b82f6)' : 'var(--ui-stroke-secondary)',
-          children: jsx('title',{children:`${String(bucket.hour).padStart(2,'0')}:00 - ${String(bucket.hour).padStart(2,'0')}:59: ${fmt(bucket.total)} tokens · ${fmt(bucket.calls)} calls`})
+          children: jsx('title',{children:chartTitle(bucket)})
         },`bar-${bucket.hour}`)
       })),
       ...[0, 3, 6, 9, 12, 15, 18, 21, 23].map(hour => jsx('text',{
-        x: 40 + hour * 28,
+        x: plotLeft + hour * step,
         y: 158,
         textAnchor: 'middle',
         fill: 'var(--ui-text-tertiary)',

@@ -159,7 +159,7 @@ class Ledger:
         def aggregate(start, end=now, include_hourly=False):
             groups = {}
             ambiguous = {}
-            hourly = [{'hour': hour, 'total': 0, 'calls': 0} for hour in range(24)] if include_hourly else None
+            hourly = [{'hour': hour, 'total': 0, 'calls': 0, 'providers': []} for hour in range(24)] if include_hourly else None
             for profile, provider, lo, hi, raw, route in rows:
                 if hi < start or hi > end:
                     continue
@@ -177,6 +177,13 @@ class Ledger:
                     bucket = hourly[dt.datetime.fromtimestamp(hi, self.tz).hour]
                     bucket['total'] += sum(counts[:4])
                     bucket['calls'] += counts[5]
+                    provider_key = identity['provider_identity']
+                    provider = next((item for item in bucket['providers'] if item['identity'] == provider_key), None)
+                    if provider is None:
+                        provider = {'identity': provider_key, 'label': identity['provider_label'], 'total': 0}
+                        bucket['providers'].append(provider)
+                    provider['total'] += sum(counts[:4])
+                    bucket['providers'].sort(key=lambda item: (-item['total'], item['identity']))
             for group in [*groups.values(), *ambiguous.values()]:
                 group['total'] = sum(group[key] for key in COUNTERS[:4])
             result = {
@@ -186,6 +193,9 @@ class Ledger:
                 'boundary_ambiguous_groups': list(ambiguous.values()),
                 'boundary_ambiguous_total': sum(group['total'] for group in ambiguous.values()),
             }
+            for bucket in hourly or []:
+                if sum(provider['total'] for provider in bucket['providers']) != bucket['total']:
+                    raise AssertionError('Hourly provider totals do not conserve bucket total')
             if hourly is not None:
                 result['hourly'] = hourly
             return result
