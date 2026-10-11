@@ -26,8 +26,52 @@ class Checks(unittest.TestCase):
             result = ledger.summary(now)
             self.assertEqual(result['timezone'], 'America/New_York')
             self.assertEqual(result['periods']['day']['start'], dt.datetime(2026, 3, 9, 4, tzinfo=dt.timezone.utc).timestamp())
-            # March 1 predates DST and must use UTC-5, not the current UTC-4.
             self.assertEqual(result['periods']['month']['start'], dt.datetime(2026, 3, 1, 5, tzinfo=dt.timezone.utc).timestamp())
+            self.assertIn('2026-03-09', result['days'])
+            ledger.db.close()
+
+    def test_days_preserve_calendar_keys_and_match_today(self):
+        with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
+            ledger = b.Ledger(pathlib.Path(tmp) / 'ledger.db', timezone='UTC')
+            row = {**dict.fromkeys(b.COUNTERS, 0), 'session_id': 'fake', 'billing_provider': 'provider', 'input_tokens': 10}
+            ledger.observe('fake', [row], 2 * 86400 + 100, observed_start=2 * 86400 + 90)
+            ledger.observe('fake', [{**row, 'input_tokens': 16}], 2 * 86400 + 200)
+            ledger.observe('fake', [{**row, 'input_tokens': 23}], 3 * 86400 + 100)
+            result = ledger.summary(3 * 86400 + 200)
+            self.assertEqual(len(result['days']), 60)
+            self.assertTrue({'1970-01-02', '1970-01-03', '1970-01-04'} <= set(result['days']))
+            self.assertEqual(result['days']['1970-01-03']['total'], 6)
+            self.assertEqual(result['days']['1970-01-04']['total'], 0)
+            self.assertEqual(result['days']['1970-01-04']['boundary_ambiguous_total'], 7)
+            self.assertEqual(result['days']['1970-01-04']['boundary_ambiguous_groups'][0]['total'], 7)
+            self.assertEqual(result['days']['1970-01-04'], result['periods']['day'])
+            self.assertEqual(result['days']['1970-01-03']['boundary_ambiguous_total'], 0)
+            ledger.db.close()
+
+    def test_days_keep_boundary_deltas_ambiguous(self):
+        with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
+            ledger = b.Ledger(pathlib.Path(tmp) / 'ledger.db', timezone='UTC')
+            row = {**dict.fromkeys(b.COUNTERS, 0), 'session_id': 'fake', 'billing_provider': 'provider', 'input_tokens': 5}
+            ledger.observe('fake', [row], 86395, observed_start=86390)
+            ledger.observe('fake', [{**row, 'input_tokens': 12}], 86405)
+            result = ledger.summary(86410)
+            self.assertEqual(result['days']['1970-01-02']['total'], 0)
+            self.assertEqual(result['days']['1970-01-02']['boundary_ambiguous_total'], 7)
+            self.assertEqual(result['days']['1970-01-01']['boundary_ambiguous_total'], 0)
+            ledger.db.close()
+
+    def test_days_cutoff_is_last_sixty_calendar_days(self):
+        with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
+            ledger = b.Ledger(pathlib.Path(tmp) / 'ledger.db', timezone='UTC')
+            row = {**dict.fromkeys(b.COUNTERS, 0), 'session_id': 'fake', 'billing_provider': 'provider', 'input_tokens': 10}
+            old = 0
+            recent = 61 * 86400
+            ledger.observe('fake', [row], old, observed_start=old)
+            ledger.observe('fake', [{**row, 'input_tokens': 11}], recent)
+            result = ledger.summary(recent)
+            self.assertEqual(len(result['days']), 60)
+            self.assertNotIn('1970-01-01', result['days'])
+            self.assertIn('1970-03-03', result['days'])
             ledger.db.close()
 
     def test_invalid_counters_do_not_replace_baseline(self):

@@ -140,22 +140,67 @@ class Ledger:
             self.db.execute('INSERT OR REPLACE INTO profiles VALUES(?,?)',(profile,observed_start))
 
     def summary(self, now):
-        local = dt.datetime.fromtimestamp(now,self.tz)
-        day = dt.datetime.combine(local.date(), dt.time.min, tzinfo=self.tz)
-        starts = {'day':day.timestamp(),'week':(day-dt.timedelta(days=day.weekday())).timestamp(),'month':day.replace(day=1).timestamp()}
-        periods = {}
-        for period,start in starts.items():
+        local = dt.datetime.fromtimestamp(now, self.tz)
+        today = local.date()
+        day = dt.datetime.combine(today, dt.time.min, tzinfo=self.tz)
+        starts = {
+            'day': day.timestamp(),
+            'week': dt.datetime.combine(today - dt.timedelta(days=today.weekday()), dt.time.min, tzinfo=self.tz).timestamp(),
+            'month': dt.datetime.combine(today.replace(day=1), dt.time.min, tzinfo=self.tz).timestamp(),
+        }
+        cutoff_date = today - dt.timedelta(days=59)
+        cutoff = dt.datetime.combine(cutoff_date, dt.time.min, tzinfo=self.tz).timestamp()
+        lower_bound = min(cutoff, *starts.values())
+        rows = list(self.db.execute(
+            'SELECT profile,provider,lo,hi,counts,route FROM deltas WHERE hi>=? AND hi<=?',
+            (lower_bound, now),
+        ))
+
+        def aggregate(start, end=now):
             groups = {}
             ambiguous = {}
-            for profile,provider,lo,hi,raw,route in self.db.execute('SELECT profile,provider,lo,hi,counts,route FROM deltas WHERE hi>=? AND hi<=?',(start,now)):
+            for profile, provider, lo, hi, raw, route in rows:
+                if hi < start or hi > end:
+                    continue
                 target = groups if lo >= start else ambiguous
                 identity = resolve_provider(provider, route, self.provider_configs.get(profile, {}))
-                group = target.setdefault((profile,identity['identity']),dict(profile=profile,**identity,**dict.fromkeys(COUNTERS,0)))
-                for k,v in zip(COUNTERS,json.loads(raw)): group[k] += v
-            for g in [*groups.values(), *ambiguous.values()]: g['total'] = sum(g[k] for k in COUNTERS[:4])
-            periods[period] = {'start':start,'groups':list(groups.values()),'total':sum(g['total'] for g in groups.values()),'boundary_ambiguous_groups':list(ambiguous.values()),'boundary_ambiguous_total':sum(g['total'] for g in ambiguous.values())}
+                group = target.setdefault(
+                    (profile, identity['identity']),
+                    dict(profile=profile, **identity, **dict.fromkeys(COUNTERS, 0)),
+                )
+                for key, value in zip(COUNTERS, json.loads(raw)):
+                    group[key] += value
+            for group in [*groups.values(), *ambiguous.values()]:
+                group['total'] = sum(group[key] for key in COUNTERS[:4])
+            return {
+                'start': start,
+                'groups': list(groups.values()),
+                'total': sum(group['total'] for group in groups.values()),
+                'boundary_ambiguous_groups': list(ambiguous.values()),
+                'boundary_ambiguous_total': sum(group['total'] for group in ambiguous.values()),
+            }
+
+        periods = {period: aggregate(start) for period, start in starts.items()}
+        days = {}
+        for offset in range(60):
+            date = cutoff_date + dt.timedelta(days=offset)
+            start = dt.datetime.combine(date, dt.time.min, tzinfo=self.tz).timestamp()
+            next_start = dt.datetime.combine(date + dt.timedelta(days=1), dt.time.min, tzinfo=self.tz).timestamp()
+            days[date.isoformat()] = aggregate(start, min(next_start - 1e-9, now))
+        # Keep the calendar-day entry byte-for-byte equivalent to the legacy day
+        # period, including its boundary handling and group ordering.
+        days[today.isoformat()] = periods['day']
         installed = self.db.execute("SELECT value FROM meta WHERE key='installed_at'").fetchone()
-        return {'schema_version':1, 'generated_at':now, 'timezone':self.timezone, 'history':'No historical per-call totals inferred from cumulative rows.', 'installed_at':installed[0] if installed else None, 'periods':periods, 'anomaly_count':self.db.execute('SELECT count(*) FROM anomalies').fetchone()[0]}
+        return {
+            'schema_version': 1,
+            'generated_at': now,
+            'timezone': self.timezone,
+            'history': 'No historical per-call totals inferred from cumulative rows.',
+            'installed_at': installed[0] if installed else None,
+            'periods': periods,
+            'days': days,
+            'anomaly_count': self.db.execute('SELECT count(*) FROM anomalies').fetchone()[0],
+        }
 
 @contextlib.contextmanager
 def read_source(path):

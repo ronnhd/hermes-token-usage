@@ -66,6 +66,16 @@ async function readSummary() {
       for (const row of rows) if (!object(row) || typeof row.profile !== 'string' || typeof row.billing_provider !== 'string' || FIELDS.some(k => !count(row[k]))) invalid()
     }
   }
+  if (data.days !== undefined) {
+    if (!object(data.days)) invalid()
+    for (const [key, day] of Object.entries(data.days)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !object(day) || !Number.isFinite(day.start) || !count(day.total) || !count(day.boundary_ambiguous_total)) invalid()
+      for (const rows of [day.groups, day.boundary_ambiguous_groups]) {
+        if (!Array.isArray(rows)) invalid()
+        for (const row of rows) if (!object(row) || typeof row.profile !== 'string' || typeof row.billing_provider !== 'string' || FIELDS.some(k => !count(row[k]))) invalid()
+      }
+    }
+  }
   for (const source of Object.values(data.sources)) if (!object(source) || typeof source.ok !== 'boolean' || (source.providers !== undefined && (!Array.isArray(source.providers) || source.providers.some(p => typeof p !== 'string')))) invalid()
   return data
 }
@@ -126,28 +136,76 @@ function CompactTable({ rows, denominator, models = false }) {
     ]},r.key || r.model))},'body')
   ]})
 }
+function dateKey(timestamp, timezone) {
+  const parts = new Intl.DateTimeFormat('en', {timeZone: timezone, year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date(timestamp * 1000))
+  return `${parts.find(p=>p.type==='year').value}-${parts.find(p=>p.type==='month').value}-${parts.find(p=>p.type==='day').value}`
+}
+function shiftDate(key, amount) {
+  const value = new Date(`${key}T00:00:00Z`)
+  value.setUTCDate(value.getUTCDate() + amount)
+  return value.toISOString().slice(0, 10)
+}
+function dateRange(start, end) {
+  const result = []
+  for (let key = start; key <= end; key = shiftDate(key, 1)) result.push(key)
+  return result
+}
+function dateLabel(start, end) {
+  return start === end ? start : `${start} – ${end}`
+}
+function selectionFor(data, preset, fromDate, toDate) {
+  const today = dateKey(data.generated_at, data.timezone)
+  const legacy = {today:'day', 'this-week':'week', 'this-month':'month'}
+  if (legacy[preset]) {
+    const period = data.periods[legacy[preset]]
+    return {label:{today:'Today', 'this-week':'This week', 'this-month':'This month'}[preset], start:dateKey(period.start, data.timezone), groups:period.groups, ambiguous:period.boundary_ambiguous_groups, startTimestamp:period.start}
+  }
+  let start = today
+  let end = today
+  if (preset === 'yesterday') start = end = shiftDate(today, -1)
+  if (preset === 'last-7') start = shiftDate(today, -6)
+  if (preset === 'last-30') start = shiftDate(today, -29)
+  if (preset === 'custom') {
+    start = fromDate || today
+    end = toDate || start
+    if (start > end) [start, end] = [end, start]
+  }
+  const days = data.days || {}
+  const selected = dateRange(start, end).map(key => days[key]).filter(Boolean)
+  return {label:preset === 'custom' ? dateLabel(start, end) : ({yesterday:'Yesterday','last-7':'Last 7 days','last-30':'Last 30 days'}[preset] || dateLabel(start, end)), start, groups:selected.flatMap(day=>day.groups), ambiguous:selected.flatMap(day=>day.boundary_ambiguous_groups), startTimestamp:selected[0]?.start || null}
+}
 function Details() {
   const q = useSummary()
-  const [period,setPeriod] = useState('day')
+  const [preset,setPreset] = useState('today')
+  const [fromDate,setFromDate] = useState('')
+  const [toDate,setToDate] = useState('')
   const [profile,setProfile] = useState('')
   const [tab,setTab] = useState('Providers')
   const [showAll,setShowAll] = useState(false)
   const d=q.data
   if (!d) return jsx('div',{style:{padding:20,color:'var(--ui-text-secondary)'},children:q.isError?String(q.error?.message || q.error):'Loading local ledger…'})
-  const p=d.periods[period], usage=aggregateUsage(p.groups,profile)
-  const profiles=[...new Set([...Object.keys(d.sources),...Object.values(d.periods).flatMap(v=>v.groups.map(r=>r.profile))])].sort()
-  const ambiguous=p.boundary_ambiguous_groups.filter(r=>!profile || r.profile===profile)
+  const selection = selectionFor(d, preset, fromDate, toDate)
+  const usage=aggregateUsage(selection.groups,profile)
+  const profiles=[...new Set([...Object.keys(d.sources),...Object.values(d.periods).flatMap(v=>v.groups.map(r=>r.profile)),...Object.values(d.days || {}).flatMap(v=>v.groups.map(r=>r.profile))])].sort()
+  const ambiguous=selection.ambiguous.filter(r=>!profile || r.profile===profile)
   const boundaryTotal=ambiguous.reduce((n,r)=>n+r.total,0)
   const sources=Object.entries(d.sources).filter(([name])=>!profile || profile===name)
+  const dateInputStyle={...button,background:'var(--ui-bg)',color:'var(--ui-text-secondary)'}
   return jsx('section',{'data-token-usage':'details',style:{padding:16,overflow:'auto',height:'100%',color:'var(--ui-text-secondary)',display:'flex',flexDirection:'column',gap:12},children:[
     jsx('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'},children:[
       jsx('h2',{style:{fontSize:16,fontWeight:600,margin:0,marginRight:'auto'},children:'Token usage · this Mac'},'title'),
-      ...['day','week','month'].map(v=>jsx('button',{type:'button',style:{...button,color:period===v?'var(--ui-accent)':'var(--ui-text-secondary)'},'aria-pressed':period===v,onClick:()=>setPeriod(v),title:v==='week'?'Calendar week starts Monday':v==='month'?'Calendar month':'Calendar day',children:{day:'Today',week:'Week',month:'Month'}[v]},v)),
+      jsx('select',{'aria-label':'Date range',value:preset,onChange:e=>setPreset(e.target.value),style:{...button,background:'var(--ui-bg)'},children:[
+        ['today','Today'],['yesterday','Yesterday'],['this-week','This week'],['last-7','Last 7 days'],['this-month','This month'],['last-30','Last 30 days'],['custom','Custom range']
+      ].map(([value,label])=>jsx('option',{value,children:label},value))},'date-range'),
+      preset==='custom' ? jsx('div',{style:{display:'flex',gap:6,alignItems:'center'},children:[
+        jsx('label',{style:muted,children:'From'},'from-label'),jsx('input',{type:'date','aria-label':'From date',value:fromDate,onChange:e=>setFromDate(e.target.value),style:dateInputStyle},'from'),
+        jsx('label',{style:muted,children:'To'},'to-label'),jsx('input',{type:'date','aria-label':'To date',value:toDate,onChange:e=>setToDate(e.target.value),style:dateInputStyle},'to')
+      ]},'date-inputs') : null,
       jsx('select',{'aria-label':'Profile',value:profile,onChange:e=>setProfile(e.target.value),style:{...button,background:'var(--ui-bg)'},children:[jsx('option',{value:'',children:'All profiles'},'all'),...profiles.map(name=>jsx('option',{value:name,children:name},name))]},'profile'),
       jsx('button',{type:'button',style:button,disabled:q.isFetching,onClick:()=>q.refetch(),children:q.isFetching?'Refreshing…':'Refresh'},'refresh')
     ]},'header'),
     jsx('div',{role:'tablist','aria-label':'Usage views',style:{display:'flex',gap:6},children:['Providers','Top models'].map(name=>jsx('button',{type:'button',role:'tab','aria-selected':tab===name,style:{...button,color:tab===name?'var(--ui-accent)':'var(--ui-text-secondary)'},onClick:()=>setTab(name),children:name},name))},'tabs'),
-    jsx('div',{style:muted,children:`Share denominator: ${fmt(usage.total)} confirmed selected tokens · ${d.timezone} · ${status(d)}`},'summary'),
+    jsx('div',{style:muted,children:`${selection.label} · ${fmt(usage.total)} tokens · Share denominator: ${fmt(usage.total)} confirmed selected tokens · ${d.timezone} · ${status(d)}`},'summary'),
     q.isError?jsx('p',{style:muted,children:'Refresh failed: '+String(q.error?.message || q.error)+'. Showing last cached data.'},'error'):null,
     tab==='Providers' ? jsx('div',{role:'tabpanel',children:usage.profiles.length?usage.profiles.map(pr=>jsx('details',{'data-profile':pr.profile,open:true,style:{borderTop:'1px solid var(--ui-stroke-secondary)',paddingTop:8,marginBottom:10},children:[
       jsx('summary',{style:{cursor:'pointer',fontWeight:600,fontSize:13},children:`${pr.profile} · ${fmt(pr.total)} tokens`},'profile'),
@@ -161,7 +219,7 @@ function Details() {
     ]},'models'),
     jsx('details',{'data-coverage':'',style:muted,children:[
       jsx('summary',{style:{cursor:'pointer'},children:`Coverage & history · observed only · ${fmt(boundaryTotal)} boundary-excluded tokens · ${status(d)}${sources.some(([,s])=>!s.ok || s.config_ok===false)?' · source warnings':''}`},'summary'),
-      jsx('p',{children:`Observed since ${when(d.installed_at,d.timezone)}. Selected period starts ${when(p.start,d.timezone)}. Snapshot ${when(d.generated_at,d.timezone)}. NOT complete historical day/week/month totals: pre-existing cumulative usage was baselined, never inferred by last_seen.`},'history'),
+      jsx('p',{children:`Observed since ${when(d.installed_at,d.timezone)}. Selected range starts ${selection.startTimestamp ? when(selection.startTimestamp,d.timezone) : 'unavailable'}. Snapshot ${when(d.generated_at,d.timezone)}. NOT complete historical day/week/month totals: pre-existing cumulative usage was baselined, never inferred by last_seen.`},'history'),
       jsx('p',{children:`Boundary-ambiguous: ${fmt(boundaryTotal)} tokens excluded from confirmed total. Canonical total = uncached input + output + cache read + cache write. Reasoning is an output subset, not additive. Counter reset anomalies: ${fmt(d.anomaly_count)}.`},'accounting'),
       ...sources.map(([name,s])=>jsx('p',{children:`${name}: ${s.ok?`${fmt(s.row_count)} source rows`:'READ FAILED · '+(s.error || 'source unavailable')+'; prior ledger retained'}${s.config_ok===false?' · '+s.config_status:''}. Zero usage rows hidden, not discarded.`},name)),
       jsx(Evidence,{routes:ambiguous},'boundary'),
