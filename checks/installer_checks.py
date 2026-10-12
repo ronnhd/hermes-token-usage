@@ -24,6 +24,7 @@ class InstallerChecks(unittest.TestCase):
             plugin = home / '.hermes/desktop-plugins/token-usage'
             text = (plugin / 'plugin.js').read_text()
             self.assertIn(str(home / '.hermes/token-usage-state/summary.json'), text)
+            self.assertIn('Asia/Bangkok', text)
             self.assertNotIn('__HERMES_TOKEN_USAGE_CONFIG__', text)
             data = home / '.hermes/token-usage-state'
             (data / 'ledger.db').write_bytes(b'FAKE LEDGER SENTINEL')

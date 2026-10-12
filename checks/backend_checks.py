@@ -12,6 +12,13 @@ b = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(b)
 
 class Checks(unittest.TestCase):
+    def test_effective_and_raw_token_metrics_are_explicit(self):
+        self.assertEqual(b.DEFAULT_TIMEZONE, 'Asia/Bangkok')
+        counts = [7, 4, 30, 5, 2, 1]
+        self.assertEqual(b.effective_tokens(counts), 11)
+        self.assertEqual(b.raw_total_tokens(counts), 46)
+        self.assertEqual(b.effective_tokens(dict(zip(b.COUNTERS, counts))), 11)
+
     def test_discovery_is_dynamic_and_preserves_identity(self):
         with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
             home = pathlib.Path(tmp)
@@ -97,6 +104,27 @@ class Checks(unittest.TestCase):
             self.assertEqual(result['days']['2026-05-03'], day)
             ledger.db.close()
 
+    def test_effective_totals_exclude_cache_but_preserve_detail_fields(self):
+        with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
+            ledger = b.Ledger(pathlib.Path(tmp) / 'ledger.db', timezone='UTC')
+            row = {**dict.fromkeys(b.COUNTERS, 0), 'session_id': 'effective', 'billing_provider': 'provider',
+                   'input_tokens': 10, 'output_tokens': 5, 'cache_read_tokens': 100,
+                   'cache_write_tokens': 20, 'reasoning_tokens': 2, 'api_call_count': 1}
+            ledger.observe('fake', [row], 100, observed_start=100)
+            ledger.observe('fake', [{**row, 'input_tokens': 16, 'output_tokens': 9,
+                                     'cache_read_tokens': 140, 'cache_write_tokens': 30,
+                                     'reasoning_tokens': 4, 'api_call_count': 3}], 110)
+            period = ledger.summary(110)['periods']['day']
+            group = period['groups'][0]
+            self.assertEqual(period['total'], 10)
+            self.assertEqual(group['total'], group['input_tokens'] + group['output_tokens'])
+            self.assertEqual(group['cache_read_tokens'], 40)
+            self.assertEqual(group['cache_write_tokens'], 10)
+            self.assertEqual(group['reasoning_tokens'], 2)
+            self.assertEqual(period['hourly'][0]['total'], 10)
+            self.assertEqual(sum(provider['total'] for provider in period['hourly'][0]['providers']), 10)
+            ledger.db.close()
+
     def test_days_cutoff_is_last_sixty_calendar_days(self):
         with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
             ledger = b.Ledger(pathlib.Path(tmp) / 'ledger.db', timezone='UTC')
@@ -176,20 +204,20 @@ class Checks(unittest.TestCase):
             self.assertEqual(ledger.summary(100)['periods']['day']['total'], 0)
             changed = {**row, 'input_tokens': 107, 'output_tokens': 24, 'cache_read_tokens': 33, 'cache_write_tokens': 7, 'reasoning_tokens': 12}
             ledger.observe('fake', [changed], 110)
-            self.assertEqual(ledger.summary(110)['periods']['day']['total'], 16)
+            self.assertEqual(ledger.summary(110)['periods']['day']['total'], 11)
             ledger.observe('fake', [changed, {**row, 'task': 'fake-import', 'first_seen': 1}], 120)
-            self.assertEqual(ledger.summary(120)['periods']['day']['total'], 16)
+            self.assertEqual(ledger.summary(120)['periods']['day']['total'], 11)
             ledger.observe('fake', [{**changed, 'input_tokens': 1}], 130)
             self.assertEqual(ledger.summary(130)['anomaly_count'], 1)
-            self.assertEqual(ledger.summary(130)['periods']['day']['total'], 16)
+            self.assertEqual(ledger.summary(130)['periods']['day']['total'], 11)
             ledger.observe('fake', [{**row, 'task': 'fake-new', 'first_seen': 140}], 150)
-            self.assertEqual(ledger.summary(150)['periods']['day']['total'], 171)
+            self.assertEqual(ledger.summary(150)['periods']['day']['total'], 131)
             ledger.db.close()
 
     def test_cross_boundary_and_missing_database_retains_deltas(self):
         with tempfile.TemporaryDirectory(prefix='.backend-checks-', dir=ROOT) as tmp:
             path = pathlib.Path(tmp)
-            ledger = b.Ledger(path / 'ledger.db')
+            ledger = b.Ledger(path / 'ledger.db', timezone='UTC')
             row = dict.fromkeys(b.COUNTERS, 0)
             row.update(session_id='fake', billing_provider='provider/raw:fake', input_tokens=5)
             ledger.observe('fake', [row], 86395, observed_start=86390)

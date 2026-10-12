@@ -2,14 +2,14 @@
 
 Experimental **v0.1** local token ledger for the native [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk). Free to use, modify and share under MIT. Not an official Nous Research plugin.
 
-A compact D/W/M status-bar chip and detail page show observed day / Monday week / calendar month increments. **Providers** (default) aggregates all models/tasks/modes per exact provider/endpoint identity in collapsible profile sections; **Top models** ranks the top five exact model identifiers across the selected profiles/providers, with a Show all toggle and expandable distribution. Both share period and profile filters. Cache buckets, reasoning, raw IDs, route evidence and attribution candidates appear only on expansion. This reads **this Mac**, not the currently selected remote gateway.
+A compact D/W/M status-bar chip and detail page show observed day / Monday week / calendar month increments. **Providers** (default) aggregates all models/tasks/modes per exact provider/endpoint identity in collapsible profile sections; **Top models** ranks the top five exact model identifiers across the selected profiles/providers, with a Show all toggle and expandable distribution. Both share period and profile filters. Effective usage is input + output; cache buckets, reasoning, raw IDs, route evidence and attribution candidates appear only on expansion. This reads **this Mac**, not the currently selected remote gateway.
 
 Shares use **all confirmed selected tokens** as the denominator, including Unattributed and legacy/missing-model usage. Legacy/missing-model tokens are excluded from model ranking and disclosed separately with their amount and share; model shares may sum to less than 100%. Zero-token rows are hidden without deleting evidence. Coverage/history/boundary warnings stay in a one-line expandable summary. The chip abbreviates K/M; its tooltip retains full counts.
 
 ## Requirements and scope
 
 - macOS, a logged-in GUI session, Hermes Desktop with `@hermes/plugin-sdk`, React Query, and `window.hermesDesktop.readFileText`.
-- Python 3.9+ with SQLite and IANA timezone data (`zoneinfo`). Invalid or unavailable zones fail explicitly; default is UTC.
+- Python 3.9+ with SQLite and IANA timezone data (`zoneinfo`). Invalid or unavailable zones fail explicitly; default is Asia/Bangkok.
 - Local `state.db` databases with `session_model_usage` containing the columns in `backend.py` (`KEYS`, `COUNTERS`, `first_seen`). Unsupported/missing databases are marked unavailable, not migrated.
 - No runtime npm install, server, API key or gateway restart. Node 24+ and npm are only needed for UI checks.
 
@@ -24,7 +24,7 @@ python3 install.py --dry-run
 python3 install.py --timezone America/New_York
 ```
 
-Use your preferred IANA timezone, or omit the flag for UTC. `HERMES_TOKEN_USAGE_TIMEZONE` supplies a default; the argument takes precedence. The installer writes a literal local `{summaryPath, timezone}` configuration into a copy of `plugin.js`; the repository placeholder `__HERMES_TOKEN_USAGE_CONFIG__` is a documented template, not a usable installed configuration. Do not copy the template directly into Desktop.
+Use your preferred IANA timezone, or omit the flag for Asia/Bangkok. `HERMES_TOKEN_USAGE_TIMEZONE` supplies a default; the argument takes precedence. The installer writes a literal local `{summaryPath, timezone}` configuration into a copy of `plugin.js`; the repository placeholder `__HERMES_TOKEN_USAGE_CONFIG__` is a documented template, not a usable installed configuration. Do not copy the template directly into Desktop.
 
 Hermes home defaults to `$HERMES_HOME` or `~/.hermes`. To collect the root and its child profiles, explicitly choose that root (an active named profile's `$HERMES_HOME` may point elsewhere):
 
@@ -74,7 +74,7 @@ The ledger, snapshot and logs are **preserved by default**, including on install
 
 - These are **observed positive deltas since the first successful baseline**, not complete day/week/month totals or per-call historical reports. No historical totals are inferred from cumulative rows or `last_seen`.
 - Full compound keys include session, model, provider, base URL, billing mode and task. New deltas retain model, provider, endpoint, billing mode and task; display labels never change snapshot keys or add usage. Missing IDs without endpoint evidence remain `Unknown`. No model-to-provider guessing.
-- Total = canonical uncached input + output + cache read + cache write. Reasoning is an **output subset**, never added twice. This assumes Hermes stores normalized canonical counters; older/different accounting schemas may not be compatible. Counts are not invoices, API cost estimates or subscription charges.
+- Displayed/billable total = canonical input + output. Provider-reported cache read/write counters remain visible in row details and are not included in D/W/M, hourly, provider, or model totals. Reasoning is an **output subset**, never added twice. This assumes Hermes stores normalized canonical counters; older/different accounting schemas may not be compatible. Counts are not invoices, API cost estimates or subscription charges.
 - New historical/imported rows are baselined; rows with `first_seen` after the prior successful profile observation contribute their initial counters. Any counter decrease rebaselines the entire row and increments an anomaly count. Rows deleted between polls cannot be recovered.
 - Interval bounds span prior pre-read to current post-read observation. Intervals crossing the timezone's calendar boundary are reported separately as **boundary-ambiguous**, excluded from confirmed totals. Calendar boundaries use Python `ZoneInfo`, including DST offset changes; week starts Monday, month starts on day 1.
 - Sleep, outages and delayed database persistence widen intervals. Observation times are not exact API execution times. System clock changes can affect attribution. Changing timezone recomputes calendar attribution from the same ledger, not new history.

@@ -13,6 +13,22 @@ from zoneinfo import ZoneInfo
 
 COUNTERS = ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens', 'api_call_count')
 KEYS = ('session_id', 'model', 'billing_provider', 'billing_base_url', 'billing_mode', 'task')
+
+
+def effective_tokens(values):
+    """Displayed/billable usage: canonical input plus output only."""
+    if hasattr(values, 'get'):
+        return (values.get('input_tokens') or 0) + (values.get('output_tokens') or 0)
+    return values[0] + values[1]
+
+
+def raw_total_tokens(values):
+    """Raw provider-reported token sum, including cache fields for audit detail."""
+    if hasattr(values, 'get'):
+        return sum(values.get(key) or 0 for key in COUNTERS[:4])
+    return sum(values[:4])
+
+
 import hashlib
 from urllib.parse import urlsplit, urlunsplit
 
@@ -87,7 +103,7 @@ def resolve_provider(provider, route, configs=None):
             'attribution': match, 'provider_candidates': [safe_text(n) for n in candidates], 'legacy_unidentified': legacy}
 
 
-DEFAULT_TIMEZONE = 'UTC'
+DEFAULT_TIMEZONE = 'Asia/Bangkok'
 
 class Ledger:
     def __init__(self, path, timezone=DEFAULT_TIMEZONE):
@@ -175,17 +191,17 @@ class Ledger:
                     group[key] += value
                 if hourly is not None and confirmed:
                     bucket = hourly[dt.datetime.fromtimestamp(hi, self.tz).hour]
-                    bucket['total'] += sum(counts[:4])
+                    bucket['total'] += effective_tokens(counts)
                     bucket['calls'] += counts[5]
                     provider_key = identity['provider_identity']
                     provider = next((item for item in bucket['providers'] if item['identity'] == provider_key), None)
                     if provider is None:
                         provider = {'identity': provider_key, 'label': identity['provider_label'], 'total': 0}
                         bucket['providers'].append(provider)
-                    provider['total'] += sum(counts[:4])
+                    provider['total'] += effective_tokens(counts)
                     bucket['providers'].sort(key=lambda item: (-item['total'], item['identity']))
             for group in [*groups.values(), *ambiguous.values()]:
-                group['total'] = sum(group[key] for key in COUNTERS[:4])
+                group['total'] = effective_tokens(group)
             result = {
                 'start': start,
                 'groups': list(groups.values()),
@@ -303,7 +319,7 @@ def collect(ledger, sources, now=None, config_python=None):
     result['sources'] = status
     result['limitations'] = [
         'Totals are observed positive deltas since installation, not complete calendar-period history.',
-        'Total = uncached canonical input + output + cache read + cache write. Reasoning is an output subset; never added again.',
+        'Displayed total = effective canonical input + output. Cache read/write fields remain visible as raw detail; reasoning is an output subset and is never added again.',
         'Sampling every 30s. Cross-boundary intervals are quarantined as ambiguous, not assigned to a date. Sleeps/outages widen intervals.',
         'Observation timestamps measure database persistence, not exact API execution time; delayed queued writes may arrive later.',
         'Newly encountered historical rows are baselined; decreases reset the entire row and flag an anomaly. Deleted rows between polls cannot be recovered.',
@@ -329,7 +345,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--hermes-home', type=pathlib.Path, default=pathlib.Path(os.environ.get('HERMES_HOME', '~/.hermes')).expanduser())
     parser.add_argument('--data-dir', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parent / 'data')
-    parser.add_argument('--timezone', default=os.environ.get('HERMES_TOKEN_USAGE_TIMEZONE', DEFAULT_TIMEZONE), help='IANA timezone; defaults to UTC')
+    parser.add_argument('--timezone', default=os.environ.get('HERMES_TOKEN_USAGE_TIMEZONE', DEFAULT_TIMEZONE), help=f'IANA timezone; defaults to {DEFAULT_TIMEZONE}')
     parser.add_argument('--config-python', type=pathlib.Path, help='Optional trusted Python interpreter with PyYAML for profile labels')
     args = parser.parse_args()
     ZoneInfo(args.timezone)  # Fail before creating state if invalid.

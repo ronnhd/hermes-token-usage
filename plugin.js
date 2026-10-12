@@ -9,7 +9,7 @@ const ROUTE = '/token-usage'
 const CONFIG = '__HERMES_TOKEN_USAGE_CONFIG__'
 const SUMMARY = CONFIG.summaryPath
 const FIELDS = ['total','input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','reasoning_tokens','api_call_count']
-const HEADERS = ['Total','Input (uncached)','Output','Cache read','Cache write','Reasoning (output subset)','Calls']
+const HEADERS = ['Effective total','Input (uncached)','Output','Cache read','Cache write','Reasoning (output subset)','Calls']
 const compact = n => Number(n || 0) >= 1e6 ? (Number(n)/1e6).toFixed(2).replace(/\.?0+$/, '')+'M' : Number(n || 0) >= 1e3 ? (Number(n)/1e3).toFixed(1).replace(/\.?0+$/, '')+'K' : fmt(n)
 const fmt = n => Number(n || 0).toLocaleString('en-US')
 const when = (n, timezone = 'UTC') => n ? new Date(n * 1000).toLocaleString('en-GB', { timeZone: timezone }) + ' ' + timezone : 'unavailable'
@@ -366,7 +366,7 @@ function Details() {
     jsx('details',{'data-coverage':'',style:muted,children:[
       jsx('summary',{style:{cursor:'pointer'},children:`Coverage & history · observed only · ${fmt(boundaryTotal)} boundary-excluded tokens · ${status(d)}${sources.some(([,s])=>!s.ok || s.config_ok===false)?' · source warnings':''}`},'summary'),
       jsx('p',{children:`Observed since ${when(d.installed_at,d.timezone)}. Selected range starts ${selection.startTimestamp ? when(selection.startTimestamp,d.timezone) : 'unavailable'}. Snapshot ${when(d.generated_at,d.timezone)}. NOT complete historical day/week/month totals: pre-existing cumulative usage was baselined, never inferred by last_seen.`},'history'),
-      jsx('p',{children:`Boundary-ambiguous: ${fmt(boundaryTotal)} tokens excluded from confirmed total. Canonical total = uncached input + output + cache read + cache write. Reasoning is an output subset, not additive. Counter reset anomalies: ${fmt(d.anomaly_count)}.`},'accounting'),
+      jsx('p',{children:`Boundary-ambiguous: ${fmt(boundaryTotal)} tokens excluded from confirmed total. Effective total = canonical input + output; cache read/write remain raw detail fields. Reasoning is an output subset, not additive. Counter reset anomalies: ${fmt(d.anomaly_count)}.`},'accounting'),
       ...sources.map(([name,s])=>jsx('p',{children:`${name}: ${s.ok?`${fmt(s.row_count)} source rows`:'READ FAILED · '+(s.error || 'source unavailable')+'; prior ledger retained'}${s.config_ok===false?' · '+s.config_status:''}. Zero usage rows hidden, not discarded.`},name)),
       jsx(Evidence,{routes:ambiguous},'boundary'),
       jsx('ul',{style:{paddingLeft:18},children:d.limitations.map((s,i)=>jsx('li',{children:s},i))},'limits')

@@ -35,7 +35,7 @@ let mounted
 try {
   await build({stdin:{contents:source.replace("'__HERMES_TOKEN_USAGE_CONFIG__'", JSON.stringify({summaryPath:'/synthetic/summary.json',timezone:'UTC'})) + '\nexport { readSummary, aggregateUsage, selectionFor, combineHourly };',resolveDir:rootDir,sourcefile:'plugin.js'},bundle:true,format:'esm',platform:'node',external:['react','react/jsx-runtime'],outfile:join(tmp,'plugin.mjs'),plugins:[{name:'synthetic-sdk', setup(b){b.onResolve({filter:/^@hermes\/plugin-sdk$/},()=>({path:'sdk',namespace:'shim'}));b.onLoad({filter:/.*/,namespace:'shim'},()=>({contents:'export const ROUTES_AREA="routes", SIDEBAR_NAV_AREA="sidebar.nav", PALETTE_AREA="palette"; export const host={navigate:p=>globalThis.__usageNavigate(p)}; export const useQuery=o=>{globalThis.__usageQueryOptions=o; return globalThis.__usageQuery};',loader:'js'}))}}]})
   const mod = await import(pathToFileURL(join(tmp,'plugin.mjs')))
-  const route = (profile, provider_identity, model, total, extra={}) => ({...group, profile, provider_identity, identity:profile+provider_identity+model+JSON.stringify(extra), model, total, input_tokens:total?total-4:0, output_tokens:total?2:0, cache_read_tokens:total?1:0, cache_write_tokens:total?1:0, reasoning_tokens:total?2:0, api_call_count:total?1:0, provider_label:'same-label', attribution:'explicit provider ID', ...extra})
+  const route = (profile, provider_identity, model, total, extra={}) => ({...group, profile, provider_identity, identity:profile+provider_identity+model+JSON.stringify(extra), model, total, input_tokens:total?total-2:0, output_tokens:total?2:0, cache_read_tokens:total?1:0, cache_write_tokens:total?1:0, reasoning_tokens:total?2:0, api_call_count:total?1:0, provider_label:'same-label', attribution:'explicit provider ID', ...extra})
   const rows = [route('alpha','p1','exact/model',10), route('alpha','p1','other/model',20,{task:'aux',billing_mode:'other'}),route('alpha','p2','exact/model',30),route('beta','p1','exact/model',40),route('alpha','zero','zero',0),route('alpha','legacy','',15,{legacy_unidentified:true,attribution:'legacy unidentified'}),route('alpha','unknown','known/model',5,{billing_provider:'Unknown',attribution:'unresolved'})]
   const derived = mod.aggregateUsage(rows)
   assert.equal(derived.total,120)
@@ -47,7 +47,7 @@ try {
   assert.equal(derived.models.reduce((n,r)=>n+r.total,0)+derived.missingModelTotal,derived.total)
   assert.equal(mod.aggregateUsage(rows,'beta').total,40)
   assert.equal(rows.length,7, 'derivation leaves evidence intact')
-  assert.equal(derived.profiles.reduce((n,p)=>n+p.providers.reduce((v,r)=>v+r.input_tokens+r.output_tokens+r.cache_read_tokens+r.cache_write_tokens,0),0),derived.total,'reasoning and calls are not additive token buckets')
+  assert.equal(derived.profiles.reduce((n,p)=>n+p.providers.reduce((v,r)=>v+r.input_tokens+r.output_tokens,0),0),derived.total,'effective total is input plus output; cache/reasoning/calls are detail fields')
   const exactIds=mod.aggregateUsage([route('alpha','p1','Exact/Model',10),route('alpha','p1','exact/model',20)])
   assert.equal(exactIds.models.length,2,'model identifiers remain case-sensitive and exact')
   const fallback=mod.aggregateUsage([route('alpha',undefined,'m1',10,{identity:'old-route-one'}),route('alpha',undefined,'m2',20,{identity:'old-route-two'})])

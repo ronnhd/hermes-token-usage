@@ -141,7 +141,7 @@ class ProviderChecks(unittest.TestCase):
             rows = ledger.db.execute('SELECT id,profile,provider,lo,hi,counts,route FROM deltas').fetchall()
             self.assertEqual(rows, [(1, 'fake', 'custom', 100., 110., '[7, 3, 2, 1, 2, 1]', None)])
             result = ledger.summary(120)['periods']['day']
-            self.assertEqual(result['total'], 13)
+            self.assertEqual(result['total'], 10)
             self.assertEqual(result['groups'][0]['attribution'], 'legacy unidentified')
             self.assertNotIn('tempting-name', result['groups'][0]['provider_label'])
 

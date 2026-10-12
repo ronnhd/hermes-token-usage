@@ -25,7 +25,7 @@ def options(description):
     parser.add_argument('--hermes-home', type=Path)
     parser.add_argument('--no-launchd', action='store_true', help='Install files only; manual collection')
     parser.add_argument('--dry-run', action='store_true')
-    parser.add_argument('--timezone', default=os.environ.get('HERMES_TOKEN_USAGE_TIMEZONE', 'UTC'))
+    parser.add_argument('--timezone', default=os.environ.get('HERMES_TOKEN_USAGE_TIMEZONE', 'Asia/Bangkok'))
     args = parser.parse_args()
     args.user_home = args.user_home.expanduser().resolve()
     default_home = args.user_home / '.hermes'
